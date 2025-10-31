@@ -17,45 +17,68 @@ import contactRoutes from "./routes/contact.js";
 import teamRoutes from "./routes/team.js";
 import uploadRoutes from "./routes/upload.js";
 
-
-
 // Initialize app
 const app = express();
 
-// ✅ Basic CORS (allow frontend)
+/* -------------------------------------------------------------------------- */
+/* 🌐 CORS SETUP — Allow local + production domains                           */
+/* -------------------------------------------------------------------------- */
+const allowedOrigins = [
+  'http://localhost:5173',              // local development (Vite)
+  'https://unitedlinkfoundation.com',   // production site (Namecheap)
+  'https://www.unitedlinkfoundation.com', // www version (optional)
+];
+
 app.use(
   cors({
-    origin: process.env.ORIGIN || 'http://localhost:5173',
+    origin: function (origin, callback) {
+      // Allow requests with no origin (like mobile apps or curl)
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn(`❌ Blocked by CORS: ${origin}`);
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     credentials: true,
   })
 );
 
-// ✅ Core middleware
-app.use(express.json({ limit: '2mb' })); // slightly larger for markdown + images
+/* -------------------------------------------------------------------------- */
+/* 🧩 Core Middleware                                                         */
+/* -------------------------------------------------------------------------- */
+app.use(express.json({ limit: '2mb' }));
 app.use(morgan('dev'));
 
-// ✅ Serve uploaded static files
+/* -------------------------------------------------------------------------- */
+/* 📁 Static Files                                                            */
+/* -------------------------------------------------------------------------- */
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
-// ✅ API Routes
+/* -------------------------------------------------------------------------- */
+/* 🚏 API Routes                                                              */
+/* -------------------------------------------------------------------------- */
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/posts', postRoutes);
 app.use('/api/donations', donationRoutes);
 app.use('/api/search', searchRoutes);
-app.use("/api/about", aboutRoutes);
-app.use("/api/contact", contactRoutes);
-app.use("/api/team", teamRoutes);
-app.use("/api/members", memberRoutes);
-app.use("/api/upload", uploadRoutes);
+app.use('/api/about', aboutRoutes);
+app.use('/api/contact', contactRoutes);
+app.use('/api/team', teamRoutes);
+app.use('/api/members', memberRoutes);
+app.use('/api/upload', uploadRoutes);
 
-
-
-// ✅ Root route
+/* -------------------------------------------------------------------------- */
+/* 🌍 Root Route                                                              */
+/* -------------------------------------------------------------------------- */
 app.get('/', (req, res) => res.send('🌍 ULF API is running successfully.'));
 
-// ✅ Start Server
+/* -------------------------------------------------------------------------- */
+/* 🚀 Start Server                                                            */
+/* -------------------------------------------------------------------------- */
 const PORT = process.env.PORT || 5020;
+
 connectDB()
   .then(() => {
     app.listen(PORT, () => {
