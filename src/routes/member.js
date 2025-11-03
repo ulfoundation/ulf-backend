@@ -1,21 +1,38 @@
 import express from "express";
 import multer from "multer";
 import fs from "fs/promises";
-import cloudinary from "../config/cloudinary.js";
+import { v2 as cloudinary } from "cloudinary";
 import Member from "../models/Member.js";
 
 const router = express.Router();
 
 /* -------------------------------------------------------------------------- */
-/* ☁️ Multer setup (temporary local upload before Cloudinary) */
+/* ☁️ Cloudinary Configuration (explicit)                                     */
+/* -------------------------------------------------------------------------- */
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+/* -------------------------------------------------------------------------- */
+/* 📦 Multer setup (temporary local upload before Cloudinary)                 */
 /* -------------------------------------------------------------------------- */
 const upload = multer({
   dest: "temp_uploads/",
   limits: { fileSize: 20 * 1024 * 1024 }, // 20MB max
 });
 
+/* -------------------------------------------------------------------------- */
+/* 🧱 Ensure temp_uploads exists (important for Render/Linux)                  */
+/* -------------------------------------------------------------------------- */
+import fsSync from "fs";
+if (!fsSync.existsSync("temp_uploads")) {
+  fsSync.mkdirSync("temp_uploads");
+}
+
 /* ========================================================================== */
-/* 📋 GET — Fetch all members */
+/* 📋 GET — Fetch all members                                                 */
 /* ========================================================================== */
 router.get("/", async (req, res) => {
   try {
@@ -28,22 +45,16 @@ router.get("/", async (req, res) => {
 });
 
 /* ========================================================================== */
-/* 📆 FILTER — Get members by registration date range */
+/* 📆 FILTER — Get members by registration date range                         */
 /* ========================================================================== */
 router.get("/filter", async (req, res) => {
   try {
     const { start, end } = req.query;
-
     if (!start || !end) {
       return res
         .status(400)
         .json({ message: "Please provide both start and end dates (YYYY-MM-DD)" });
     }
-
-    // Convert strings to Date objects
-    const startDate = new Date(start);
-    const endDate = new Date(end);
-    endDate.setHours(23, 59, 59, 999); // include entire end day
 
     const members = await Member.find({
       dateOfRegistration: { $gte: start, $lte: end },
@@ -68,7 +79,7 @@ router.get("/filter", async (req, res) => {
 });
 
 /* ========================================================================== */
-/* 📊 ANALYTICS — Member statistics summary */
+/* 📊 ANALYTICS — Member statistics summary                                   */
 /* ========================================================================== */
 router.get("/stats", async (req, res) => {
   try {
@@ -77,7 +88,6 @@ router.get("/stats", async (req, res) => {
     const banned = await Member.countDocuments({ status: "banned" });
     const inactive = await Member.countDocuments({ status: "inactive" });
 
-    // Get this month’s registrations
     const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
       .toISOString()
       .split("T")[0];
@@ -102,7 +112,7 @@ router.get("/stats", async (req, res) => {
 });
 
 /* ========================================================================== */
-/* ➕ POST — Add a new member (with optional avatar) */
+/* ➕ POST — Add a new member (with optional avatar)                           */
 /* ========================================================================== */
 router.post("/", upload.single("avatar"), async (req, res) => {
   try {
@@ -127,45 +137,38 @@ router.post("/", upload.single("avatar"), async (req, res) => {
       dateOfRegistration,
     } = req.body;
 
-    // 🧾 Basic validation
+    // 🧾 Validation
     if (!name || !email || !phone) {
-      return res
-        .status(400)
-        .json({ message: "Name, email, and phone are required" });
+      return res.status(400).json({ message: "Name, email, and phone are required" });
     }
 
     // 🚫 Prevent duplicates
-    const existing = await Member.findOne({
-      $or: [{ email }, { phone }],
-    });
+    const existing = await Member.findOne({ $or: [{ email }, { phone }] });
     if (existing) {
-      return res
-        .status(400)
-        .json({ message: "A member with this email or phone already exists" });
+      return res.status(400).json({ message: "A member with this email or phone already exists" });
     }
 
-    // ☁️ Upload avatar if provided
-    let avatarUrl =
-      "https://res.cloudinary.com/demo/image/upload/v1720000000/default-avatar.png";
+    // ☁️ Upload avatar to Cloudinary if provided
+    let avatarUrl = "https://res.cloudinary.com/demo/image/upload/v1720000000/default-avatar.png";
 
     if (req.file) {
-      const result = await cloudinary.uploader.upload(req.file.path, {
-        folder: "ulf_members",
-        transformation: [
-          { width: 400, height: 400, crop: "fill", gravity: "face" },
-        ],
-      });
-      avatarUrl = result.secure_url;
-      await fs.unlink(req.file.path);
+      try {
+        const result = await cloudinary.uploader.upload(req.file.path, {
+          folder: "ulf_members",
+          transformation: [{ width: 400, height: 400, crop: "fill", gravity: "face" }],
+        });
+        avatarUrl = result.secure_url;
+        await fs.unlink(req.file.path);
+      } catch (uploadErr) {
+        console.error("⚠️ Cloudinary upload failed:", uploadErr.message);
+      }
     }
 
-    // 🗓️ Auto-set date of registration if not provided
-    const today = new Date();
-    const formattedDate = dateOfRegistration
-      ? dateOfRegistration
-      : today.toISOString().split("T")[0]; // yyyy-mm-dd
+    // 🗓️ Registration date
+    const today = new Date().toISOString().split("T")[0];
+    const formattedDate = dateOfRegistration || today;
 
-    // ✅ Create and save new member
+    // ✅ Save member
     const newMember = new Member({
       name,
       role: role || "Member",
@@ -189,8 +192,7 @@ router.post("/", upload.single("avatar"), async (req, res) => {
     });
 
     const savedMember = await newMember.save();
-
-    console.log("✅ New member added:", savedMember.name);
+    console.log("✅ Member saved:", savedMember.name);
     res.status(201).json(savedMember);
   } catch (err) {
     console.error("❌ Error adding member:", err);
@@ -199,45 +201,39 @@ router.post("/", upload.single("avatar"), async (req, res) => {
 });
 
 /* ========================================================================== */
-/* ✏️ PUT — Update Member (details or avatar) */
+/* ✏️ PUT — Update Member (details or avatar)                                 */
 /* ========================================================================== */
 router.put("/:id", upload.single("avatar"), async (req, res) => {
   try {
-    let updateData = { ...req.body };
+    const updateData = { ...req.body };
 
-    // ☁️ If new avatar uploaded
+    // ☁️ New avatar uploaded
     if (req.file) {
-      const result = await cloudinary.uploader.upload(req.file.path, {
-        folder: "ulf_members",
-        transformation: [
-          { width: 400, height: 400, crop: "fill", gravity: "face" },
-        ],
-      });
-      updateData.avatar = result.secure_url;
-      await fs.unlink(req.file.path);
-    }
-
-    // 🗓️ Ensure dateOfRegistration exists
-    if (!updateData.dateOfRegistration) {
-      const existing = await Member.findById(req.params.id);
-      if (existing && !existing.dateOfRegistration) {
-        updateData.dateOfRegistration = new Date()
-          .toISOString()
-          .split("T")[0];
+      try {
+        const result = await cloudinary.uploader.upload(req.file.path, {
+          folder: "ulf_members",
+          transformation: [{ width: 400, height: 400, crop: "fill", gravity: "face" }],
+        });
+        updateData.avatar = result.secure_url;
+        await fs.unlink(req.file.path);
+      } catch (uploadErr) {
+        console.warn("⚠️ Avatar upload failed:", uploadErr.message);
       }
     }
 
-    const updated = await Member.findByIdAndUpdate(req.params.id, updateData, {
-      new: true,
-      runValidators: true,
-    });
+    // Ensure registration date exists
+    const existing = await Member.findById(req.params.id);
+    if (!existing) return res.status(404).json({ message: "Member not found" });
 
-    if (!updated) {
-      return res.status(404).json({ message: "Member not found" });
+    if (!updateData.dateOfRegistration && !existing.dateOfRegistration) {
+      updateData.dateOfRegistration = new Date().toISOString().split("T")[0];
     }
 
-    console.log("✏️ Member updated:", updated.name);
-    res.json(updated);
+    Object.assign(existing, updateData);
+    await existing.save();
+
+    console.log("✏️ Member updated:", existing.name);
+    res.json(existing);
   } catch (err) {
     console.error("❌ Error updating member:", err);
     res.status(500).json({ message: "Failed to update member" });
@@ -245,16 +241,24 @@ router.put("/:id", upload.single("avatar"), async (req, res) => {
 });
 
 /* ========================================================================== */
-/* ❌ DELETE — Remove Member */
+/* ❌ DELETE — Remove Member                                                  */
 /* ========================================================================== */
 router.delete("/:id", async (req, res) => {
   try {
-    const deleted = await Member.findByIdAndDelete(req.params.id);
-    if (!deleted) {
-      return res.status(404).json({ message: "Member not found" });
+    const member = await Member.findById(req.params.id);
+    if (!member) return res.status(404).json({ message: "Member not found" });
+
+    if (member.avatar && !member.avatar.includes("default-avatar.png")) {
+      const publicId = member.avatar.split("/").slice(-1)[0].split(".")[0];
+      try {
+        await cloudinary.uploader.destroy(`ulf_members/${publicId}`);
+      } catch (err) {
+        console.warn("⚠️ Failed to delete avatar:", err.message);
+      }
     }
 
-    console.log("🗑️ Member deleted:", deleted.name);
+    await member.deleteOne();
+    console.log("🗑️ Member deleted:", member.name);
     res.json({ message: "Member deleted successfully" });
   } catch (err) {
     console.error("❌ Error deleting member:", err);

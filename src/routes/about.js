@@ -1,25 +1,33 @@
 import express from "express";
 import multer from "multer";
 import { CloudinaryStorage } from "multer-storage-cloudinary";
-import cloudinary from "../config/cloudinary.js";
+import { v2 as cloudinary } from "cloudinary";
 import About from "../models/About.js";
 import { requireAuth } from "../middleware/auth.js";
 
 const router = express.Router();
 
 /* -------------------------------------------------------------------------- */
-/* ☁️ Cloudinary Storage (Multiple Banner Uploads - Auto Replace & Cleanup)   */
+/* ☁️ CLOUDINARY CONFIGURATION (ensures multer uses the correct credentials)  */
+/* -------------------------------------------------------------------------- */
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+/* -------------------------------------------------------------------------- */
+/* ☁️ MULTER CLOUDINARY STORAGE (supports up to 3 banners)                    */
 /* -------------------------------------------------------------------------- */
 const storage = new CloudinaryStorage({
   cloudinary,
   params: {
     folder: "ulf_about",
     allowed_formats: ["jpg", "jpeg", "png", "webp"],
-    transformation: [{ quality: "auto", fetch_format: "auto" }],
+    transformation: [{ width: 1600, height: 800, crop: "fill", quality: "auto" }],
   },
 });
 
-// Allow up to 3 banner images
 const upload = multer({
   storage,
   limits: { files: 3 },
@@ -57,7 +65,14 @@ router.get("/", async (req, res) => {
       });
     }
 
-    res.json(about);
+    const validImages = (about.images || []).filter(
+      (url) => typeof url === "string" && url.startsWith("http")
+    );
+
+    res.json({
+      content: about.content,
+      images: validImages,
+    });
   } catch (err) {
     console.error("❌ Error fetching About content:", err);
     res.status(500).json({ message: "Server error fetching About content" });
@@ -65,7 +80,7 @@ router.get("/", async (req, res) => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* 🔸 PUT — Admin Only (Requires Auth)                                        */
+/* 🔸 PUT — Admin Only (Requires Auth + Upload Images to Cloudinary)          */
 /* -------------------------------------------------------------------------- */
 router.put("/", requireAuth, upload.array("images", 3), async (req, res) => {
   try {
@@ -76,6 +91,8 @@ router.put("/", requireAuth, upload.array("images", 3), async (req, res) => {
 
     const { content } = req.body;
     const uploadedImages = req.files?.map((file) => file.path) || [];
+
+    console.log("📸 Uploaded images:", uploadedImages);
 
     let about = await About.findOne();
 
@@ -99,18 +116,28 @@ router.put("/", requireAuth, upload.array("images", 3), async (req, res) => {
             }
           }
         }
-        // Replace with new images
         about.images = uploadedImages.slice(0, 3);
       }
 
-      // Update text content if provided
+      // 📝 Update text content
       if (content && content.trim()) {
         about.content = content.trim();
       }
     }
 
     await about.save();
-    res.json(about);
+
+    const validImages = (about.images || []).filter(
+      (url) => typeof url === "string" && url.startsWith("http")
+    );
+
+    console.log("✅ About page updated successfully:", validImages);
+
+    res.json({
+      message: "✅ About page updated successfully!",
+      content: about.content,
+      images: validImages,
+    });
   } catch (err) {
     console.error("❌ Error updating About content:", err);
     res.status(500).json({ message: "Failed to update About content" });
