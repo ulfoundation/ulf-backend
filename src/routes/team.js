@@ -103,16 +103,44 @@ router.post(
   "/",
   requireAuth,
   [
-    body("name").isString().trim().isLength({ min: 2 }),
-    body("title").isString().trim().isLength({ min: 2 }),
-    body("email").optional().isEmail(),
-    body("phone").optional().isString().trim(),
-    body("photo").optional().isString().trim(),
-    body("bio").optional().isString().isLength({ max: 1000 }),
-    body("facebook").optional().isString().trim(),
-    body("instagram").optional().isString().trim(),
-    body("linkedin").optional().isString().trim(),
-    body("twitter").optional().isString().trim(),
+    body("name")
+      .isString().withMessage("Name must be text")
+      .trim()
+      .isLength({ min: 2 }).withMessage("Name must be at least 2 characters"),
+    body("title")
+      .isString().withMessage("Title must be text")
+      .trim()
+      .isLength({ min: 2 }).withMessage("Title must be at least 2 characters"),
+    body("email")
+      .optional({ checkFalsy: true })
+      .isEmail().withMessage("Email must be valid"),
+    body("phone")
+      .optional({ checkFalsy: true })
+      .isString().withMessage("Phone must be text")
+      .trim(),
+    body("photo")
+      .optional({ checkFalsy: true })
+      .isString().withMessage("Photo must be a URL string")
+      .trim(),
+    body("bio")
+      .optional({ checkFalsy: true })
+      .isString().withMessage("Bio must be text"),
+    body("facebook")
+      .optional({ checkFalsy: true })
+      .isString().withMessage("Facebook must be a URL string")
+      .trim(),
+    body("instagram")
+      .optional({ checkFalsy: true })
+      .isString().withMessage("Instagram must be a URL string")
+      .trim(),
+    body("linkedin")
+      .optional({ checkFalsy: true })
+      .isString().withMessage("LinkedIn must be a URL string")
+      .trim(),
+    body("twitter")
+      .optional({ checkFalsy: true })
+      .isString().withMessage("Twitter must be a URL string")
+      .trim(),
   ],
   async (req, res) => {
   try {

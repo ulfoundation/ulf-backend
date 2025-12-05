@@ -487,7 +487,7 @@ router.post(
 router.post(
   "/:id/comments",
   commentLimiter,
-  [param("id").isString(), body("text").isString().trim().isLength({ min: 1, max: 2000 })],
+  [param("id").isString(), body("text").isString().trim().isLength({ min: 1 })],
   async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -545,7 +545,7 @@ router.get(
 router.put(
   "/:id/comments/:commentId",
   commentLimiter,
-  [param("id").isString(), param("commentId").isString(), body("text").isString().trim().isLength({ min: 1, max: 2000 })],
+  [param("id").isString(), param("commentId").isString(), body("text").isString().trim().isLength({ min: 1 })],
   async (req, res) => {
     try {
       const errors = validationResult(req);

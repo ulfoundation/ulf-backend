@@ -75,7 +75,7 @@ app.use(generalLimiter);
 /* -------------------------------------------------------------------------- */
 // Ensure Stripe webhook receives raw body before JSON parsing
 app.use("/api/donations/webhook", express.raw({ type: "application/json" }));
-app.use(express.json({ limit: "5mb" })); // slightly higher for media payloads
+app.use(express.json({ limit: "20mb" }));
 app.use(morgan("dev"));
 
 /* -------------------------------------------------------------------------- */
