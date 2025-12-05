@@ -1,8 +1,73 @@
 import express from "express";
 import Team from "../models/Team.js";
 import { requireAuth } from "../middleware/auth.js";
+import { body, validationResult } from "express-validator";
+import { ok, badRequest, forbidden, notFound, serverError } from "../utils/respond.js";
+import logger from "../utils/logger.js";
+import path from "path";
+import fs from "fs/promises";
+import https from "https";
+import fsSync from "fs";
 
 const router = express.Router();
+
+// Local directory for team photos
+const uploadsRoot = path.join(process.cwd(), "../client/uploads");
+const teamDir = path.join(uploadsRoot, "team");
+try { fsSync.mkdirSync(teamDir, { recursive: true }); } catch {}
+
+function stableFilenameFromUrl(u) {
+  try {
+    const p = new URL(u).pathname;
+    const base = path.basename(p);
+    const ext = path.extname(base) || ".jpg";
+    const name = base.replace(ext, "").replace(/[^a-z0-9_-]+/gi, "-");
+    return `${name}${ext.toLowerCase()}`;
+  } catch {
+    const ext = path.extname(u) || ".jpg";
+    const name = path.basename(u, ext).replace(/[^a-z0-9_-]+/gi, "-");
+    return `${name}${ext}`;
+  }
+}
+
+async function ensureLocalPhoto(src, baseUrl) {
+  if (!src || typeof src !== "string") return src;
+  if (!src.includes("cloudinary")) return src;
+  const filename = stableFilenameFromUrl(src);
+  const dest = path.join(teamDir, filename);
+  try {
+    await fs.access(dest);
+  } catch {
+    await new Promise((resolve, reject) => {
+      const file = fsSync.createWriteStream(dest);
+      const fetchWithRedirect = (url, redirectsLeft = 3) => {
+        https
+          .get(url, (res) => {
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirectsLeft > 0) {
+              const next = res.headers.location.startsWith("http")
+                ? res.headers.location
+                : new URL(res.headers.location, url).toString();
+              return fetchWithRedirect(next, redirectsLeft - 1);
+            }
+            if (res.statusCode !== 200) {
+              file.close();
+              fsSync.unlink(dest, () => {});
+              return reject(new Error(`HTTP ${res.statusCode}`));
+            }
+            res.pipe(file);
+            file.on("finish", () => file.close(resolve));
+          })
+          .on("error", (err) => {
+            file.close();
+            fsSync.unlink(dest, () => {});
+            reject(err);
+          });
+      };
+      fetchWithRedirect(src);
+    });
+  }
+  return `${baseUrl}/uploads/team/${filename}`;
+}
 
 /* -------------------------------------------------------------------------- */
 /* 🔹 GET — Public (Fetch all team members)                                   */
@@ -10,21 +75,52 @@ const router = express.Router();
 router.get("/", async (req, res) => {
   try {
     const team = await Team.find().sort({ createdAt: -1 });
-    res.json(team);
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const out = [];
+    for (const m of team) {
+      let photo = m.photo;
+      let changed = false;
+      try {
+        const local = await ensureLocalPhoto(photo, baseUrl);
+        if (local !== photo) { photo = local; changed = true; }
+      } catch {}
+      if (changed) {
+        Team.updateOne({ _id: m._id }, { $set: { photo } }).catch(() => {});
+      }
+      out.push({ ...m.toObject(), photo });
+    }
+    ok(res, { team: out });
   } catch (err) {
-    console.error("❌ Error fetching team:", err);
-    res.status(500).json({ message: "Server error fetching team" });
+    logger.error("Error fetching team", err);
+    serverError(res, "Server error fetching team");
   }
 });
 
 /* -------------------------------------------------------------------------- */
 /* 🔸 POST — Admin Only (Add new team member)                                 */
 /* -------------------------------------------------------------------------- */
-router.post("/", requireAuth, async (req, res) => {
+router.post(
+  "/",
+  requireAuth,
+  [
+    body("name").isString().trim().isLength({ min: 2 }),
+    body("title").isString().trim().isLength({ min: 2 }),
+    body("email").optional().isEmail(),
+    body("phone").optional().isString().trim(),
+    body("photo").optional().isString().trim(),
+    body("bio").optional().isString().isLength({ max: 1000 }),
+    body("facebook").optional().isString().trim(),
+    body("instagram").optional().isString().trim(),
+    body("linkedin").optional().isString().trim(),
+    body("twitter").optional().isString().trim(),
+  ],
+  async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return badRequest(res, errors.array());
     const userRole = req.user?.role;
     if (userRole !== "admin") {
-      return res.status(403).json({ message: "Access denied — Admins only" });
+      return forbidden(res, "Access denied — Admins only");
     }
 
     const {
@@ -49,7 +145,7 @@ router.post("/", requireAuth, async (req, res) => {
       title,
       email,
       phone,
-      photo,
+      photo, // ✅ must match frontend
       bio,
       facebook,
       instagram,
@@ -57,12 +153,13 @@ router.post("/", requireAuth, async (req, res) => {
       twitter,
     });
 
-    res.status(201).json(newMember);
+    ok(res, { member: newMember });
   } catch (err) {
-    console.error("❌ Error adding team member:", err);
-    res.status(500).json({ message: "Failed to add team member" });
+    logger.error("Error adding team member", err);
+    serverError(res, "Failed to add team member");
   }
-});
+}
+);
 
 /* -------------------------------------------------------------------------- */
 /* ✏️ PUT — Admin Only (Update team member)                                  */
@@ -71,18 +168,18 @@ router.put("/:id", requireAuth, async (req, res) => {
   try {
     const userRole = req.user?.role;
     if (userRole !== "admin") {
-      return res.status(403).json({ message: "Access denied — Admins only" });
+      return forbidden(res, "Access denied — Admins only");
     }
 
     const updated = await Team.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
     });
-    if (!updated) return res.status(404).json({ message: "Member not found" });
+    if (!updated) return notFound(res, "Member not found");
 
-    res.json(updated);
+    ok(res, { member: updated });
   } catch (err) {
-    console.error("❌ Error updating team member:", err);
-    res.status(500).json({ message: "Failed to update member" });
+    logger.error("Error updating team member", err);
+    serverError(res, "Failed to update member");
   }
 });
 
@@ -93,18 +190,18 @@ router.delete("/:id", requireAuth, async (req, res) => {
   try {
     const userRole = req.user?.role;
     if (userRole !== "admin") {
-      return res.status(403).json({ message: "Access denied — Admins only" });
+      return forbidden(res, "Access denied — Admins only");
     }
 
     const member = await Team.findByIdAndDelete(req.params.id);
     if (!member) {
-      return res.status(404).json({ message: "Member not found" });
+      return notFound(res, "Member not found");
     }
 
-    res.json({ message: "Team member deleted successfully" });
+    ok(res, { message: "Team member deleted successfully" });
   } catch (err) {
-    console.error("❌ Error deleting team member:", err);
-    res.status(500).json({ message: "Failed to delete member" });
+    logger.error("Error deleting team member", err);
+    serverError(res, "Failed to delete member");
   }
 });
 

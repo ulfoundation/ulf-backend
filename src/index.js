@@ -3,6 +3,9 @@ import express from "express";
 import cors from "cors";
 import morgan from "morgan";
 import path from "path";
+import helmet from "helmet";
+import compression from "compression";
+import rateLimit from "express-rate-limit";
 import connectDB from "./config/db.js";
 
 // 🧩 Routes
@@ -19,6 +22,7 @@ import uploadRoutes from "./routes/upload.js";
 
 // Initialize app
 const app = express();
+app.set("trust proxy", 1);
 
 /* -------------------------------------------------------------------------- */
 /* 🌐 CORS SETUP — Supports both local + production                           */
@@ -36,7 +40,6 @@ const allowedOrigins = [...new Set([...defaultOrigins, ...extraOrigins])];
 app.use(
   cors({
     origin: function (origin, callback) {
-      // Allow no-origin requests (mobile apps, curl, etc.)
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
@@ -48,21 +51,50 @@ app.use(
   })
 );
 
+// Security headers
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  })
+);
+
+// Compression
+app.use(compression());
+
+// Basic rate limiting (global)
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(generalLimiter);
+
 /* -------------------------------------------------------------------------- */
 /* 🧩 Core Middleware                                                         */
 /* -------------------------------------------------------------------------- */
+// Ensure Stripe webhook receives raw body before JSON parsing
+app.use("/api/donations/webhook", express.raw({ type: "application/json" }));
 app.use(express.json({ limit: "5mb" })); // slightly higher for media payloads
 app.use(morgan("dev"));
 
 /* -------------------------------------------------------------------------- */
 /* 📁 Serve Uploaded Files                                                    */
 /* -------------------------------------------------------------------------- */
-app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+app.use("/uploads", express.static(path.join(process.cwd(), "../client/uploads")));
 
 /* -------------------------------------------------------------------------- */
 /* 🚏 API Routes                                                              */
 /* -------------------------------------------------------------------------- */
-app.use("/api/auth", authRoutes);
+// Tighter limits for auth endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/posts", postRoutes);
 app.use("/api/donations", donationRoutes);
@@ -78,6 +110,18 @@ app.use("/api/upload", uploadRoutes);
 /* -------------------------------------------------------------------------- */
 app.get("/", (req, res) => {
   res.send("🌍 United Link Foundation API is running successfully.");
+});
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ error: "Route not found" });
+});
+
+// Error handler
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error("💥 Unhandled error:", err?.message || err);
+  res.status(err.status || 500).json({ error: err.message || "Internal Server Error" });
 });
 
 /* -------------------------------------------------------------------------- */

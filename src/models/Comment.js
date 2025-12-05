@@ -2,24 +2,21 @@ import mongoose from "mongoose";
 
 const commentSchema = new mongoose.Schema(
   {
-  postId: {
-  type: mongoose.Schema.Types.ObjectId,
-  ref: "Post",
-  required: true,
+    postId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Post",
+      required: true,
+    },
+    text: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+  author: {
+    fullname: { type: String, default: "Anonymous" },
+    avatar: { type: String, default: "/default-avatar.png" },
   },
-  text: {
-  type: String,
-  required: true,
-  trim: true,
-  },
-  user: {
-  fullname: { type: String, default: "Anonymous" },
-  avatar: { type: String, default: "/default-avatar.png" },
-  },
-  createdAt: {
-  type: Date,
-  default: Date.now,
-  },
+  ownerId: { type: String, index: true },
   },
   { timestamps: true }
 );

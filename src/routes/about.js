@@ -1,44 +1,40 @@
 import express from "express";
 import multer from "multer";
-import { CloudinaryStorage } from "multer-storage-cloudinary";
-import cloudinary from "../config/cloudinary.js";
+import path from "path";
+import fs from "fs/promises";
 import About from "../models/About.js";
 import { requireAuth } from "../middleware/auth.js";
 
 const router = express.Router();
 
 /* -------------------------------------------------------------------------- */
-/* ☁️ Cloudinary Storage (Multiple Banner Uploads - Auto Replace & Cleanup)   */
+/* 💾 Local Disk Storage for About images                                     */
 /* -------------------------------------------------------------------------- */
-const storage = new CloudinaryStorage({
-  cloudinary,
-  params: {
-    folder: "ulf_about",
-    allowed_formats: ["jpg", "jpeg", "png", "webp"],
-    transformation: [{ quality: "auto", fetch_format: "auto" }],
+const aboutDir = path.join(process.cwd(), "../client/uploads", "about");
+import fsSync from "fs";
+fsSync.mkdirSync(aboutDir, { recursive: true });
+
+/* -------------------------------------------------------------------------- */
+/* 📦 Multer disk storage (supports up to 3 banners)                          */
+/* -------------------------------------------------------------------------- */
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, aboutDir),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const base = path.basename(file.originalname, ext).replace(/[^a-z0-9_-]+/gi, "-");
+    cb(null, `${Date.now()}-${base}${ext}`);
   },
 });
 
-// Allow up to 3 banner images
-const upload = multer({
-  storage,
-  limits: { files: 3 },
-});
+const upload = multer({ storage, limits: { files: 3, fileSize: 10 * 1024 * 1024 } });
 
 /* -------------------------------------------------------------------------- */
 /* 🧹 Helper — Extract Public ID from Cloudinary URL                          */
 /* -------------------------------------------------------------------------- */
-function extractPublicId(url) {
-  try {
-    const parts = url.split("/");
-    const filename = parts.pop();
-    const folder = parts.slice(parts.indexOf("ulf_about")).join("/");
-    return folder
-      ? `${folder}/${filename.split(".")[0]}`
-      : filename.split(".")[0];
-  } catch {
-    return null;
-  }
+function extractLocalRelative(url) {
+  const idx = url.indexOf("/uploads/");
+  if (idx === -1) return null;
+  return url.slice(idx + "/uploads/".length);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -57,7 +53,14 @@ router.get("/", async (req, res) => {
       });
     }
 
-    res.json(about);
+    const validImages = (about.images || []).filter(
+      (url) => typeof url === "string" && url.startsWith("http")
+    );
+
+    res.json({
+      content: about.content,
+      images: validImages,
+    });
   } catch (err) {
     console.error("❌ Error fetching About content:", err);
     res.status(500).json({ message: "Server error fetching About content" });
@@ -65,7 +68,7 @@ router.get("/", async (req, res) => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* 🔸 PUT — Admin Only (Requires Auth)                                        */
+/* 🔸 PUT — Admin Only (Requires Auth + Upload Images to Cloudinary)          */
 /* -------------------------------------------------------------------------- */
 router.put("/", requireAuth, upload.array("images", 3), async (req, res) => {
   try {
@@ -75,7 +78,9 @@ router.put("/", requireAuth, upload.array("images", 3), async (req, res) => {
     }
 
     const { content } = req.body;
-    const uploadedImages = req.files?.map((file) => file.path) || [];
+    const uploadedImages = (req.files || []).map((file) =>
+      `${req.protocol}://${req.get("host")}/uploads/about/${path.basename(file.path)}`
+    );
 
     let about = await About.findOne();
 
@@ -86,31 +91,35 @@ router.put("/", requireAuth, upload.array("images", 3), async (req, res) => {
         images: uploadedImages.slice(0, 3),
       });
     } else {
-      // 🧹 Delete old Cloudinary images if new ones uploaded
-      if (uploadedImages.length > 0 && about.images?.length > 0) {
-        for (const imgUrl of about.images) {
-          const publicId = extractPublicId(imgUrl);
-          if (publicId) {
-            try {
-              await cloudinary.uploader.destroy(publicId);
-              console.log(`🗑️ Deleted old image: ${publicId}`);
-            } catch (delErr) {
-              console.warn("⚠️ Failed to delete old image:", delErr.message);
-            }
+      // 🧹 Replace images if new ones provided
+      if (uploadedImages.length > 0) {
+        // delete old local images if present
+        if (about.images?.length > 0) {
+          for (const imgUrl of about.images) {
+            const rel = extractLocalRelative(imgUrl);
+            if (!rel) continue;
+            const filePath = path.join(process.cwd(), "../client/uploads", rel);
+            await fs.unlink(filePath).catch(() => {});
           }
         }
-        // Replace with new images
         about.images = uploadedImages.slice(0, 3);
       }
 
-      // Update text content if provided
+      // 📝 Update text content
       if (content && content.trim()) {
         about.content = content.trim();
       }
     }
 
     await about.save();
-    res.json(about);
+
+    const imagesOut = (about.images || []).filter((url) => typeof url === "string");
+
+    res.json({
+      message: "✅ About page updated successfully!",
+      content: about.content,
+      images: imagesOut,
+    });
   } catch (err) {
     console.error("❌ Error updating About content:", err);
     res.status(500).json({ message: "Failed to update About content" });

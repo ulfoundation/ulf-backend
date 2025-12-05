@@ -1,44 +1,29 @@
 import express from "express";
 import multer from "multer";
-import { CloudinaryStorage } from "multer-storage-cloudinary";
-import cloudinary from "../config/cloudinary.js";
+import path from "path";
+import fs from "fs/promises";
 import { requireAuth } from "../middleware/auth.js";
+import { ok, badRequest, serverError } from "../utils/respond.js";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 
 /* -------------------------------------------------------------------------- */
-/* 📸 Cloudinary Storage — Smart Transformations                              */
+/* 💾 Local Disk Storage — Team Photos                                        */
 /* -------------------------------------------------------------------------- */
-const storage = new CloudinaryStorage({
-  cloudinary,
-  params: {
-    folder: "ulf_team", // Folder name in Cloudinary
-    allowed_formats: ["jpg", "jpeg", "png", "webp"],
-    transformation: [
-      {
-        width: 500,
-        height: 500,
-        crop: "fill",
-        gravity: "face", // Focuses automatically on the face
-        quality: "auto",
-        fetch_format: "auto",
-        dpr: "auto",
-      },
-    ],
-    eager: [
-      {
-        width: 250,
-        height: 250,
-        crop: "fill",
-        gravity: "face",
-        quality: "auto",
-        fetch_format: "auto",
-      },
-    ],
+const teamDir = path.join(process.cwd(), "../client/uploads", "team");
+await fs.mkdir(teamDir, { recursive: true }).catch(() => {});
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, teamDir),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const base = path.basename(file.originalname, ext).replace(/[^a-z0-9_-]+/gi, "-");
+    cb(null, `${Date.now()}-${base}${ext}`);
   },
 });
 
-const upload = multer({ storage });
+const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
 
 /* -------------------------------------------------------------------------- */
 /* 📤 POST /api/upload/team — Upload Team Photos                              */
@@ -46,22 +31,15 @@ const upload = multer({ storage });
 router.post("/team", requireAuth, upload.single("image"), async (req, res) => {
   try {
     if (!req.file || !req.file.path) {
-      return res.status(400).json({ message: "No image uploaded" });
+      return badRequest(res, "No image uploaded");
     }
 
-    // Create an optimized image URL using Cloudinary’s automatic format & quality
-    const optimizedUrl = req.file.path.replace(
-      "/upload/",
-      "/upload/f_auto,q_auto,w_500,h_500,c_fill,g_face/"
-    );
+    const url = `${req.protocol}://${req.get("host")}/uploads/team/${path.basename(req.file.path)}`;
 
-    res.json({ url: optimizedUrl });
+    ok(res, { url });
   } catch (err) {
-    console.error("❌ Upload failed:", err);
-    res.status(500).json({
-      message: "Upload failed",
-      error: err.message,
-    });
+    logger.error("Upload failed", err);
+    serverError(res, "Upload failed");
   }
 });
 

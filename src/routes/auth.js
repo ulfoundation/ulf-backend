@@ -5,6 +5,9 @@ import { requireAuth, devAuthFallback } from "../middleware/auth.js";
 import nodemailer from "nodemailer";
 import crypto from "crypto";
 import dotenv from "dotenv";
+import { body, param, validationResult } from "express-validator";
+import { ok, created, badRequest, unauthorized, notFound, serverError } from "../utils/respond.js";
+import logger from "../utils/logger.js";
 dotenv.config();
 
 const router = Router();
@@ -26,8 +29,7 @@ router.post("/seed-admin", async (req, res) => {
       role: "admin",
     });
 
-    res.json({
-      success: true,
+    ok(res, {
       message: "Admin account created successfully",
       user: {
         id: user._id,
@@ -37,19 +39,59 @@ router.post("/seed-admin", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("❌ Error seeding admin:", err);
-    res.status(500).json({ error: "Failed to seed admin" });
+    logger.error("Error seeding admin", err);
+    serverError(res, "Failed to seed admin");
+  }
+});
+
+router.put("/seed-admin", async (req, res) => {
+  try {
+    if (process.env.NODE_ENV === "production") {
+      return res.status(403).json({ error: "Not allowed in production" });
+    }
+    const { fullname, email, password } = req.body;
+    if (!email || !password) {
+      return badRequest(res, "email and password are required");
+    }
+    let user = await User.findOne({ email });
+    if (!user) {
+      user = await User.create({ fullname, email, passwordHash: password, role: "admin" });
+    } else {
+      user.fullname = fullname || user.fullname;
+      user.role = "admin";
+      user.passwordHash = password;
+      await user.save();
+    }
+    ok(res, {
+      message: "Admin account seeded/updated successfully",
+      user: {
+        id: user._id,
+        fullname: user.fullname,
+        email: user.email,
+        role: user.role,
+      },
+    });
+  } catch (err) {
+    logger.error("Error updating admin via seed-admin", err);
+    serverError(res, "Failed to update admin");
   }
 });
 
 /* -------------------------------------------------------------------------- */
 /* 👤 2. Register (non-admin users)                                           */
 /* -------------------------------------------------------------------------- */
-router.post("/register", async (req, res) => {
+router.post(
+  "/register",
+  [
+    body("fullname").isString().trim().isLength({ min: 2 }),
+    body("email").isEmail(),
+    body("password").isString().isLength({ min: 6 }),
+  ],
+  async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return badRequest(res, errors.array());
     const { fullname, email, password } = req.body;
-    if (!fullname || !email || !password)
-      return res.status(400).json({ error: "All fields are required" });
 
     const existing = await User.findOne({ email });
     if (existing)
@@ -68,8 +110,7 @@ router.post("/register", async (req, res) => {
       { expiresIn: "7d" }
     );
 
-    res.json({
-      success: true,
+    ok(res, {
       message: "Registration successful",
       token,
       user: {
@@ -80,24 +121,30 @@ router.post("/register", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("❌ Registration error:", err);
-    res.status(500).json({ error: "Failed to register user" });
+    logger.error("Registration error", err);
+    serverError(res, "Failed to register user");
   }
-});
+}
+);
 
 /* -------------------------------------------------------------------------- */
 /* 🔐 3. Login                                                                */
 /* -------------------------------------------------------------------------- */
-router.post("/login", async (req, res) => {
+router.post(
+  "/login",
+  [body("email").isEmail(), body("password").isString().isLength({ min: 1 })],
+  async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return badRequest(res, errors.array());
     const { email, password } = req.body;
     const user = await User.findOne({ email });
     if (!user)
-      return res.status(401).json({ error: "Invalid email or password" });
+      return unauthorized(res, "Invalid email or password");
 
-    const ok = await user.verifyPassword(password);
-    if (!ok)
-      return res.status(401).json({ error: "Invalid email or password" });
+    const valid = await user.verifyPassword(password);
+    if (!valid)
+      return unauthorized(res, "Invalid email or password");
 
     const token = jwt.sign(
       { id: user._id, role: user.role, fullname: user.fullname, email: user.email },
@@ -105,8 +152,7 @@ router.post("/login", async (req, res) => {
       { expiresIn: "7d" }
     );
 
-    res.json({
-      success: true,
+    ok(res, {
       message: "Login successful",
       token,
       user: {
@@ -117,10 +163,11 @@ router.post("/login", async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("❌ Login error:", err);
-    res.status(500).json({ error: "Login failed" });
+    logger.error("Login error", err);
+    serverError(res, "Login failed");
   }
-});
+}
+);
 
 /* -------------------------------------------------------------------------- */
 /* 🧠 4. Get Current Authenticated User                                       */
@@ -128,8 +175,7 @@ router.post("/login", async (req, res) => {
 router.get("/me", devAuthFallback, requireAuth, async (req, res) => {
   try {
     const user = req.user;
-    res.json({
-      success: true,
+    ok(res, {
       user: {
         id: user.id,
         fullname: user.fullname || "Dev User",
@@ -138,8 +184,8 @@ router.get("/me", devAuthFallback, requireAuth, async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("❌ Auth check failed:", err);
-    res.status(500).json({ error: "Failed to verify authentication" });
+    logger.error("Auth check failed", err);
+    serverError(res, "Failed to verify authentication");
   }
 });
 
@@ -147,28 +193,31 @@ router.get("/me", devAuthFallback, requireAuth, async (req, res) => {
 /* 🚪 5. Logout                                                               */
 /* -------------------------------------------------------------------------- */
 router.post("/logout", (_req, res) => {
-  res.json({
-    success: true,
-    message: "User logged out successfully. Please clear your token on client.",
-  });
+  ok(res, { message: "User logged out successfully. Please clear your token on client." });
 });
 
 /* -------------------------------------------------------------------------- */
 /* 🔑 6. Forgot Password / Reset Password (Admin Only)                        */
 /* -------------------------------------------------------------------------- */
-router.post("/forgot-password", async (req, res) => {
+router.post(
+  "/forgot-password",
+  [body("email").isEmail()],
+  async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return badRequest(res, errors.array());
     const { email } = req.body;
     const user = await User.findOne({ email, role: "admin" });
     if (!user)
-      return res.status(404).json({ message: "No admin found with that email" });
+      return notFound(res, "No admin found with that email");
 
     const token = crypto.randomBytes(32).toString("hex");
     user.resetToken = token;
     user.resetTokenExpires = Date.now() + 1000 * 60 * 15; // 15 min expiry
     await user.save();
 
-    const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${token}`;
+    const frontendBase = process.env.FRONTEND_URL || (process.env.NODE_ENV === "production" ? "https://unitedlinkfoundation.com" : "http://localhost:5173");
+    const resetUrl = `${frontendBase}/#/reset-password/${token}`;
 
     // 📨 Production-ready mail config
     const transporter = nodemailer.createTransport({
@@ -196,18 +245,24 @@ router.post("/forgot-password", async (req, res) => {
 
     // 🧩 Local Development Fallback
     if (process.env.NODE_ENV !== "production") {
-      console.log("🔗 Password reset link:", resetUrl);
+      logger.info("Password reset link", { resetUrl });
     }
 
-    res.json({ success: true, message: "Password reset link sent to your email" });
+    ok(res, { message: "Password reset link sent to your email" });
   } catch (err) {
-    console.error("❌ Forgot-password error:", err);
-    res.status(500).json({ message: "Failed to process request" });
+    logger.error("Forgot-password error", err);
+    serverError(res, "Failed to process request");
   }
-});
+}
+);
 
-router.post("/reset-password/:token", async (req, res) => {
+router.post(
+  "/reset-password/:token",
+  [param("token").isString().isLength({ min: 32 }), body("newPassword").isString().isLength({ min: 6 })],
+  async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return badRequest(res, errors.array());
     const { token } = req.params;
     const { newPassword } = req.body;
 
@@ -217,18 +272,19 @@ router.post("/reset-password/:token", async (req, res) => {
     });
 
     if (!user)
-      return res.status(400).json({ message: "Invalid or expired token" });
+      return badRequest(res, "Invalid or expired token");
 
     user.passwordHash = newPassword; // 🔒 automatically hashed via pre-save hook
     user.resetToken = undefined;
     user.resetTokenExpires = undefined;
     await user.save();
 
-    res.json({ success: true, message: "Password reset successful" });
+    ok(res, { message: "Password reset successful" });
   } catch (err) {
-    console.error("❌ Reset-password error:", err);
-    res.status(500).json({ message: "Failed to reset password" });
+    logger.error("Reset-password error", err);
+    serverError(res, "Failed to reset password");
   }
-});
+}
+);
 
 export default router;

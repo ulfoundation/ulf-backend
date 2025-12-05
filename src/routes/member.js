@@ -1,74 +1,98 @@
 import express from "express";
 import multer from "multer";
 import fs from "fs/promises";
-import cloudinary from "../config/cloudinary.js";
+import path from "path";
 import Member from "../models/Member.js";
+import { ok, badRequest, notFound, serverError } from "../utils/respond.js";
+import logger from "../utils/logger.js";
+import { body, param, query, validationResult } from "express-validator";
+import https from "https";
 
 const router = express.Router();
 
 /* -------------------------------------------------------------------------- */
-/* ☁️ Multer setup (temporary local upload before Cloudinary) */
+/* 💾 Local storage directories                                               */
+/* -------------------------------------------------------------------------- */
+const avatarsDir = path.join(process.cwd(), "../client/uploads", "members");
+import fsSync from "fs";
+fsSync.mkdirSync(avatarsDir, { recursive: true });
+
+/* -------------------------------------------------------------------------- */
+/* 📦 Multer setup (temporary local upload before Cloudinary)                 */
 /* -------------------------------------------------------------------------- */
 const upload = multer({
   dest: "temp_uploads/",
   limits: { fileSize: 20 * 1024 * 1024 }, // 20MB max
 });
 
+/* -------------------------------------------------------------------------- */
+/* 🧱 Ensure temp_uploads exists (important for Render/Linux)                  */
+/* -------------------------------------------------------------------------- */
+if (!fsSync.existsSync("temp_uploads")) {
+  fsSync.mkdirSync("temp_uploads");
+}
+
 /* ========================================================================== */
-/* 📋 GET — Fetch all members */
+/* 📋 GET — Fetch all members                                                 */
 /* ========================================================================== */
 router.get("/", async (req, res) => {
   try {
     const members = await Member.find().sort({ createdAt: -1 });
-    res.json(members);
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const out = [];
+    for (const m of members) {
+      let avatar = m.avatar;
+      let changed = false;
+      try {
+        const local = await ensureLocalAvatar(avatar, baseUrl);
+        if (local !== avatar) { avatar = local; changed = true; }
+      } catch {}
+      if (changed) {
+        Member.updateOne({ _id: m._id }, { $set: { avatar } }).catch(() => {});
+      }
+      out.push({ ...m.toObject(), avatar });
+    }
+    ok(res, { members: out });
   } catch (err) {
-    console.error("❌ Error fetching members:", err);
-    res.status(500).json({ message: "Failed to fetch members" });
+    logger.error("Error fetching members", err);
+    serverError(res, "Failed to fetch members");
   }
 });
 
 /* ========================================================================== */
-/* 📆 FILTER — Get members by registration date range */
+/* 📆 FILTER — Get members by registration date range                         */
 /* ========================================================================== */
-router.get("/filter", async (req, res) => {
+router.get(
+  "/filter",
+  [query("start").isISO8601(), query("end").isISO8601()],
+  async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return badRequest(res, errors.array());
     const { start, end } = req.query;
-
-    if (!start || !end) {
-      return res
-        .status(400)
-        .json({ message: "Please provide both start and end dates (YYYY-MM-DD)" });
-    }
-
-    // Convert strings to Date objects
-    const startDate = new Date(start);
-    const endDate = new Date(end);
-    endDate.setHours(23, 59, 59, 999); // include entire end day
 
     const members = await Member.find({
       dateOfRegistration: { $gte: start, $lte: end },
     }).sort({ dateOfRegistration: -1 });
 
     if (!members.length) {
-      return res.json({
-        message: `No members found between ${start} and ${end}`,
-        members: [],
-      });
+      return ok(res, { message: `No members found between ${start} and ${end}`, members: [] });
     }
 
-    res.json({
+    ok(res, {
       message: `Found ${members.length} members registered between ${start} and ${end}`,
       count: members.length,
       members,
     });
   } catch (err) {
-    console.error("❌ Error filtering members:", err);
-    res.status(500).json({ message: "Failed to filter members" });
+    logger.error("Error filtering members", err);
+    serverError(res, "Failed to filter members");
   }
-});
+}
+);
 
 /* ========================================================================== */
-/* 📊 ANALYTICS — Member statistics summary */
+/* 📊 ANALYTICS — Member statistics summary                                   */
 /* ========================================================================== */
 router.get("/stats", async (req, res) => {
   try {
@@ -77,7 +101,6 @@ router.get("/stats", async (req, res) => {
     const banned = await Member.countDocuments({ status: "banned" });
     const inactive = await Member.countDocuments({ status: "inactive" });
 
-    // Get this month’s registrations
     const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
       .toISOString()
       .split("T")[0];
@@ -87,7 +110,7 @@ router.get("/stats", async (req, res) => {
       dateOfRegistration: { $gte: startOfMonth, $lte: endOfMonth },
     });
 
-    res.json({
+    ok(res, {
       totalMembers: total,
       activeMembers: active,
       bannedMembers: banned,
@@ -96,16 +119,27 @@ router.get("/stats", async (req, res) => {
       dateRange: { startOfMonth, endOfMonth },
     });
   } catch (err) {
-    console.error("❌ Error getting stats:", err);
-    res.status(500).json({ message: "Failed to load member statistics" });
+    logger.error("Error getting stats", err);
+    serverError(res, "Failed to load member statistics");
   }
 });
 
 /* ========================================================================== */
-/* ➕ POST — Add a new member (with optional avatar) */
+/* ➕ POST — Add a new member (with optional avatar)                           */
 /* ========================================================================== */
-router.post("/", upload.single("avatar"), async (req, res) => {
+router.post(
+  "/",
+  upload.single("avatar"),
+  [
+    body("name").isString().trim().isLength({ min: 2 }),
+    body("email").isEmail(),
+    body("phone").isString().trim().isLength({ min: 7 }),
+    body("dateOfRegistration").optional().isISO8601(),
+  ],
+  async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return badRequest(res, errors.array());
     const {
       name,
       role,
@@ -127,45 +161,33 @@ router.post("/", upload.single("avatar"), async (req, res) => {
       dateOfRegistration,
     } = req.body;
 
-    // 🧾 Basic validation
-    if (!name || !email || !phone) {
-      return res
-        .status(400)
-        .json({ message: "Name, email, and phone are required" });
-    }
-
     // 🚫 Prevent duplicates
-    const existing = await Member.findOne({
-      $or: [{ email }, { phone }],
-    });
+    const existing = await Member.findOne({ $or: [{ email }, { phone }] });
     if (existing) {
-      return res
-        .status(400)
-        .json({ message: "A member with this email or phone already exists" });
+      return badRequest(res, "A member with this email or phone already exists");
     }
 
-    // ☁️ Upload avatar if provided
-    let avatarUrl =
-      "https://res.cloudinary.com/demo/image/upload/v1720000000/default-avatar.png";
-
+    // 💾 Save avatar locally if provided
+    let avatarUrl = "";
     if (req.file) {
-      const result = await cloudinary.uploader.upload(req.file.path, {
-        folder: "ulf_members",
-        transformation: [
-          { width: 400, height: 400, crop: "fill", gravity: "face" },
-        ],
-      });
-      avatarUrl = result.secure_url;
-      await fs.unlink(req.file.path);
+      try {
+        const ext = path.extname(req.file.originalname).toLowerCase();
+        const base = path.basename(req.file.originalname, ext).replace(/[^a-z0-9_-]+/gi, "-");
+        const filename = `${Date.now()}-${base}${ext}`;
+        const targetPath = path.join(avatarsDir, filename);
+        await fs.rename(req.file.path, targetPath);
+        avatarUrl = `${req.protocol}://${req.get("host")}/uploads/members/${filename}`;
+      } catch (uploadErr) {
+        logger.error("Local avatar save failed", { message: uploadErr.message });
+        await fs.unlink(req.file.path).catch(() => {});
+      }
     }
 
-    // 🗓️ Auto-set date of registration if not provided
-    const today = new Date();
-    const formattedDate = dateOfRegistration
-      ? dateOfRegistration
-      : today.toISOString().split("T")[0]; // yyyy-mm-dd
+    // 🗓️ Registration date
+    const today = new Date().toISOString().split("T")[0];
+    const formattedDate = dateOfRegistration || today;
 
-    // ✅ Create and save new member
+    // ✅ Save member
     const newMember = new Member({
       name,
       role: role || "Member",
@@ -189,77 +211,132 @@ router.post("/", upload.single("avatar"), async (req, res) => {
     });
 
     const savedMember = await newMember.save();
-
-    console.log("✅ New member added:", savedMember.name);
-    res.status(201).json(savedMember);
+    logger.info("Member saved", { name: savedMember.name });
+    return ok(res, { member: savedMember });
   } catch (err) {
-    console.error("❌ Error adding member:", err);
-    res.status(500).json({ message: "Failed to add member" });
+    logger.error("Error adding member", err);
+    serverError(res, "Failed to add member");
   }
-});
+}
+);
 
 /* ========================================================================== */
-/* ✏️ PUT — Update Member (details or avatar) */
+/* ✏️ PUT — Update Member (details or avatar)                                 */
 /* ========================================================================== */
-router.put("/:id", upload.single("avatar"), async (req, res) => {
+router.put(
+  "/:id",
+  upload.single("avatar"),
+  [param("id").isString()],
+  async (req, res) => {
   try {
-    let updateData = { ...req.body };
-
-    // ☁️ If new avatar uploaded
+    const updateData = { ...req.body };
+  
+    // 💾 New avatar uploaded
     if (req.file) {
-      const result = await cloudinary.uploader.upload(req.file.path, {
-        folder: "ulf_members",
-        transformation: [
-          { width: 400, height: 400, crop: "fill", gravity: "face" },
-        ],
-      });
-      updateData.avatar = result.secure_url;
-      await fs.unlink(req.file.path);
-    }
-
-    // 🗓️ Ensure dateOfRegistration exists
-    if (!updateData.dateOfRegistration) {
-      const existing = await Member.findById(req.params.id);
-      if (existing && !existing.dateOfRegistration) {
-        updateData.dateOfRegistration = new Date()
-          .toISOString()
-          .split("T")[0];
+      try {
+        const ext = path.extname(req.file.originalname).toLowerCase();
+        const base = path.basename(req.file.originalname, ext).replace(/[^a-z0-9_-]+/gi, "-");
+        const filename = `${Date.now()}-${base}${ext}`;
+        const targetPath = path.join(avatarsDir, filename);
+        await fs.rename(req.file.path, targetPath);
+        updateData.avatar = `${req.protocol}://${req.get("host")}/uploads/members/${filename}`;
+      } catch (uploadErr) {
+        logger.warn("Avatar save failed", { message: uploadErr.message });
+        await fs.unlink(req.file.path).catch(() => {});
       }
     }
 
-    const updated = await Member.findByIdAndUpdate(req.params.id, updateData, {
-      new: true,
-      runValidators: true,
-    });
+    // Ensure registration date exists
+    const existing = await Member.findById(req.params.id);
+    if (!existing) return notFound(res, "Member not found");
 
-    if (!updated) {
-      return res.status(404).json({ message: "Member not found" });
+    if (!updateData.dateOfRegistration && !existing.dateOfRegistration) {
+      updateData.dateOfRegistration = new Date().toISOString().split("T")[0];
     }
 
-    console.log("✏️ Member updated:", updated.name);
-    res.json(updated);
+    Object.assign(existing, updateData);
+    await existing.save();
+
+    logger.info("Member updated", { name: existing.name });
+    ok(res, { member: existing });
   } catch (err) {
-    console.error("❌ Error updating member:", err);
-    res.status(500).json({ message: "Failed to update member" });
+    logger.error("Error updating member", err);
+    serverError(res, "Failed to update member");
   }
-});
+}
+);
 
 /* ========================================================================== */
-/* ❌ DELETE — Remove Member */
+/* ❌ DELETE — Remove Member                                                  */
 /* ========================================================================== */
-router.delete("/:id", async (req, res) => {
+router.delete(
+  "/:id",
+  [param("id").isString()],
+  async (req, res) => {
   try {
-    const deleted = await Member.findByIdAndDelete(req.params.id);
-    if (!deleted) {
-      return res.status(404).json({ message: "Member not found" });
+    const member = await Member.findById(req.params.id);
+    if (!member) return notFound(res, "Member not found");
+
+    if (member.avatar && member.avatar.includes("/uploads/")) {
+      const rel = member.avatar.split("/uploads/")[1];
+      const filePath = path.join(process.cwd(), "../client/uploads", rel);
+      await fs.unlink(filePath).catch(() => {});
     }
 
-    console.log("🗑️ Member deleted:", deleted.name);
-    res.json({ message: "Member deleted successfully" });
+    await member.deleteOne();
+    logger.info("Member deleted", { name: member.name });
+    ok(res, { message: "Member deleted successfully" });
   } catch (err) {
-    console.error("❌ Error deleting member:", err);
-    res.status(500).json({ message: "Failed to delete member" });
+    logger.error("Error deleting member", err);
+    serverError(res, "Failed to delete member");
   }
-});
+}
+);
 
 export default router;
+function stableFilenameFromUrl(u) {
+  try {
+    const p = new URL(u).pathname;
+    const base = path.basename(p);
+    const ext = path.extname(base) || ".jpg";
+    const name = base.replace(ext, "").replace(/[^a-z0-9_-]+/gi, "-");
+    return `${name}${ext.toLowerCase()}`;
+  } catch {
+    const ext = path.extname(u) || ".jpg";
+    const name = path.basename(u, ext).replace(/[^a-z0-9_-]+/gi, "-");
+    return `${name}${ext}`;
+  }
+}
+
+async function ensureLocalAvatar(src, baseUrl) {
+  if (!src || typeof src !== "string") return src;
+  if (!src.includes("cloudinary")) return src;
+  const filename = stableFilenameFromUrl(src);
+  const dest = path.join(avatarsDir, filename);
+  try { await fs.access(dest); } catch {
+    await new Promise((resolve, reject) => {
+      const file = fsSync.createWriteStream(dest);
+      const fetchWithRedirect = (url, redirectsLeft = 3) => {
+        https.get(url, (res) => {
+          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirectsLeft > 0) {
+            const next = res.headers.location.startsWith("http") ? res.headers.location : new URL(res.headers.location, url).toString();
+            return fetchWithRedirect(next, redirectsLeft - 1);
+          }
+          if (res.statusCode !== 200) {
+            file.close();
+            fsSync.unlink(dest, () => {});
+            return reject(new Error(`HTTP ${res.statusCode}`));
+          }
+          res.pipe(file);
+          file.on("finish", () => file.close(resolve));
+        }).on("error", (err) => {
+          file.close();
+          fsSync.unlink(dest, () => {});
+          reject(err);
+        });
+      };
+      fetchWithRedirect(src);
+    });
+  }
+  return `${baseUrl}/uploads/members/${filename}`;
+}

@@ -2,6 +2,9 @@ import express from "express";
 import Contact from "../models/Contact.js";
 import { requireAuth } from "../middleware/auth.js";
 import nodemailer from "nodemailer";
+import { body, validationResult } from "express-validator";
+import { ok, badRequest, forbidden, serverError } from "../utils/respond.js";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 
@@ -21,21 +24,31 @@ router.get("/", async (req, res) => {
       });
     }
 
-    res.json(contact);
+    ok(res, { contact });
   } catch (err) {
-    console.error("❌ Error fetching contact:", err);
-    res.status(500).json({ message: "Server error fetching contact details" });
+    logger.error("Error fetching contact", err);
+    serverError(res, "Server error fetching contact details");
   }
 });
 
 /* -------------------------------------------------------------------------- */
 /* 🔸 PUT — Admin Only (Update Contact Info)                                 */
 /* -------------------------------------------------------------------------- */
-router.put("/", requireAuth, async (req, res) => {
+router.put(
+  "/",
+  requireAuth,
+  [
+    body("email").optional().isEmail(),
+    body("phone").optional().isString().trim(),
+    body("message").optional().isString().isLength({ max: 500 }),
+  ],
+  async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return badRequest(res, errors.array());
     const userRole = req.user?.role;
     if (userRole !== "admin") {
-      return res.status(403).json({ message: "Access denied — Admins only" });
+      return forbidden(res, "Access denied — Admins only");
     }
 
     const { email, phone, message } = req.body;
@@ -50,12 +63,13 @@ router.put("/", requireAuth, async (req, res) => {
       await contact.save();
     }
 
-    res.json(contact);
+    ok(res, { contact });
   } catch (err) {
-    console.error("❌ Failed to update contact info:", err);
-    res.status(500).json({ message: "Failed to update contact info" });
+    logger.error("Failed to update contact info", err);
+    serverError(res, "Failed to update contact info");
   }
-});
+}
+);
 
 /* -------------------------------------------------------------------------- */
 /* 📬 POST — Public Contact Form (Send Email via Gmail SMTP)                 */
@@ -65,7 +79,7 @@ router.post("/send", async (req, res) => {
     const { name, email, message } = req.body;
 
     if (!name || !email || !message) {
-      return res.status(400).json({ message: "All fields are required." });
+      return badRequest(res, "All fields are required.");
     }
 
     // ✅ Gmail SMTP configuration (App Password required)
@@ -81,7 +95,7 @@ router.post("/send", async (req, res) => {
 
     // ✅ Verify Gmail connection
     await transporter.verify();
-    console.log("📡 Gmail SMTP verified successfully");
+    logger.info("Gmail SMTP verified successfully");
 
     const mailOptions = {
       from: `"United Link Foundation Website" <${process.env.SMTP_USER}>`,
@@ -103,14 +117,12 @@ router.post("/send", async (req, res) => {
     };
 
     const info = await transporter.sendMail(mailOptions);
-    console.log("✅ Email sent successfully via Gmail SMTP:", info.response);
+    logger.info("Email sent successfully via Gmail SMTP", { response: info.response });
 
-    res.json({ message: "Message sent successfully!" });
+    ok(res, { message: "Message sent successfully!" });
   } catch (err) {
-    console.error("❌ Error sending contact email:", err);
-    res.status(500).json({
-      message: `Failed to send message — ${err.message || "SMTP error"}`,
-    });
+    logger.error("Error sending contact email", err);
+    serverError(res, `Failed to send message — ${err.message || "SMTP error"}`);
   }
 });
 

@@ -75,8 +75,7 @@ const MemberSchema = new mongoose.Schema(
     /* ---------------------------------------------------------------------- */
     avatar: {
       type: String,
-      default:
-        "https://res.cloudinary.com/demo/image/upload/v1720000000/default-avatar.png",
+      default: "/ulf_logo.png",
     },
 
     /* ---------------------------------------------------------------------- */
