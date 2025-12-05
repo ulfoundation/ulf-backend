@@ -12,6 +12,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { body, param, query, validationResult } from "express-validator";
 import { ok, created, badRequest, forbidden, serverError } from "../utils/respond.js";
 import rateLimit from "express-rate-limit";
+import { UPLOADS_ROOT, getPublicBase, extractUploadsRel, generateFilename } from "../utils/media.js";
 import logger from "../utils/logger.js";
 
 const router = Router();
@@ -28,7 +29,7 @@ const upload = multer({
 import fsSync from "fs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const uploadsRoot = path.resolve(__dirname, "../../client/uploads");
+const uploadsRoot = UPLOADS_ROOT;
 const postImagesDir = path.join(uploadsRoot, "posts", "images");
 const postVideosDir = path.join(uploadsRoot, "posts", "videos");
 const tempDir = path.join(process.cwd(), "temp_uploads");
@@ -110,12 +111,7 @@ async function ensureLocalMedia(src, baseUrl) {
   return { full: url, thumb: url, type: video ? "video" : "image" };
 }
 
-function extractLocalRelative(u) {
-  if (!u || typeof u !== "string") return null;
-  const idx = u.indexOf("/uploads/");
-  if (idx === -1) return null;
-  return u.slice(idx + "/uploads/".length);
-}
+const extractLocalRelative = extractUploadsRel;
 
 function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -145,6 +141,8 @@ function getVisitorId(req) {
   const raw = `${ip}|${ua}`;
   return crypto.createHash("sha256").update(raw).digest("hex").slice(0, 16);
 }
+
+// Using getPublicBase from utils
 
 const idKey = (req) => req.user?.id || getVisitorId(req);
 const likeLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false, keyGenerator: idKey });
@@ -193,7 +191,7 @@ router.post(
         const targetPath = path.join(targetDir, filename);
         try {
           await fs.rename(file.path, targetPath);
-      const url = `${req.protocol}://${req.get("host")}/uploads/posts/${isVideo ? "videos" : "images"}/${filename}`;
+          const url = `${getPublicBase(req)}/uploads/posts/${isVideo ? "videos" : "images"}/${filename}`;
           media.push({ full: url, thumb: url, type: isVideo ? "video" : "image" });
           logger.info("Saved media locally", { url });
         } catch (err) {
@@ -247,7 +245,7 @@ router.get(
       .limit(limit)
       .lean();
 
-    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const baseUrl = getPublicBase(req);
     const enriched = await Promise.all(
       posts.map(async (p) => {
         const [commentsCount, likesCount, userLiked, latestComments] = await Promise.all([
@@ -333,7 +331,7 @@ router.get(
       if (!errors.isEmpty()) return badRequest(res, errors.array());
       const post = await Post.findById(req.params.id).lean();
       if (!post) return badRequest(res, "Post not found");
-      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      const baseUrl = getPublicBase(req);
       const media = Array.isArray(post.imageUrls) ? post.imageUrls : [];
       const mappedMedia = await Promise.all(
         media.map(async (m) => {
@@ -385,7 +383,7 @@ router.put(
         ? req.body.removeMedia.split(",").map((s) => s.trim()).filter(Boolean)
         : [];
 
-      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      const baseUrl = getPublicBase(req);
       const incomingFiles = [
         ...(Array.isArray(req.files?.images) ? req.files.images : []),
         ...(Array.isArray(req.files?.media) ? req.files.media : []),

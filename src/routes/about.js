@@ -3,6 +3,7 @@ import multer from "multer";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs/promises";
+import { UPLOADS_ROOT, getPublicBase, extractUploadsRel, generateFilename } from "../utils/media.js";
 import About from "../models/About.js";
 import { requireAuth } from "../middleware/auth.js";
 
@@ -13,7 +14,7 @@ const router = express.Router();
 /* -------------------------------------------------------------------------- */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const aboutDir = path.resolve(__dirname, "../../client/uploads/about");
+const aboutDir = path.join(UPLOADS_ROOT, "about");
 import fsSync from "fs";
 fsSync.mkdirSync(aboutDir, { recursive: true });
 
@@ -22,11 +23,7 @@ fsSync.mkdirSync(aboutDir, { recursive: true });
 /* -------------------------------------------------------------------------- */
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, aboutDir),
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const base = path.basename(file.originalname, ext).replace(/[^a-z0-9_-]+/gi, "-");
-    cb(null, `${Date.now()}-${base}${ext}`);
-  },
+  filename: (_req, file, cb) => cb(null, generateFilename(file.originalname)),
 });
 
 const upload = multer({ storage, limits: { files: 3, fileSize: 10 * 1024 * 1024 } });
@@ -81,9 +78,8 @@ router.put("/", requireAuth, upload.array("images", 3), async (req, res) => {
     }
 
     const { content } = req.body;
-    const uploadedImages = (req.files || []).map((file) =>
-      `${req.protocol}://${req.get("host")}/uploads/about/${path.basename(file.path)}`
-    );
+    const base = getPublicBase(req);
+    const uploadedImages = (req.files || []).map((file) => `${base}/uploads/about/${path.basename(file.path)}`);
 
     let about = await About.findOne();
 
@@ -99,9 +95,9 @@ router.put("/", requireAuth, upload.array("images", 3), async (req, res) => {
         // delete old local images if present
         if (about.images?.length > 0) {
           for (const imgUrl of about.images) {
-            const rel = extractLocalRelative(imgUrl);
+            const rel = extractUploadsRel(imgUrl);
             if (!rel) continue;
-            const filePath = path.join(path.resolve(__dirname, "../../client/uploads"), rel);
+            const filePath = path.join(UPLOADS_ROOT, rel);
             await fs.unlink(filePath).catch(() => {});
           }
         }

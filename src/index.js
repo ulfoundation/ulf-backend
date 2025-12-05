@@ -4,6 +4,8 @@ import cors from "cors";
 import morgan from "morgan";
 import path from "path";
 import { fileURLToPath } from "url";
+import fsSync from "fs";
+import { ensureBaseDirs, UPLOADS_ROOT } from "./utils/media.js";
 import helmet from "helmet";
 import compression from "compression";
 import rateLimit from "express-rate-limit";
@@ -84,7 +86,7 @@ app.use(morgan("dev"));
 /* -------------------------------------------------------------------------- */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const UPLOADS_ROOT = path.resolve(__dirname, "../../client/uploads");
+ensureBaseDirs();
 app.use(
   "/uploads",
   express.static(UPLOADS_ROOT, {
@@ -96,6 +98,9 @@ app.use(
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("Pragma", "no-cache");
       res.setHeader("Expires", "0");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "*");
     },
   })
 );

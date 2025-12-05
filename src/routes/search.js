@@ -52,15 +52,20 @@ router.get("/", async (req, res) => {
     ]);
 
     // Normalize post results (ensure consistent media structure)
+    const publicBase = (process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`).replace(/\/+$/, "");
     const normalizedPosts = posts.map((p) => {
       const imageUrls = (p.imageUrls || []).map((img) => {
-        const isVideo =
-          img?.type === "video" ||
-          (typeof img === "string" && img.match(/\.(mp4|mov|webm|avi)$/i));
-        return {
-          full: typeof img === "string" ? img : img.full || img.thumb,
-          type: isVideo ? "video" : "image",
-        };
+        const src = typeof img === "string" ? img : img?.full || img?.thumb;
+        const isVideo = img?.type === "video" || (typeof src === "string" && src.match(/\.(mp4|mov|webm|avi)$/i));
+        let full = src;
+        if (typeof src === "string") {
+          const idx = src.indexOf("/uploads/");
+          if (idx !== -1) {
+            const rel = src.slice(idx + "/uploads/".length);
+            full = `${publicBase}/uploads/${rel}`;
+          }
+        }
+        return { full, type: isVideo ? "video" : "image" };
       });
 
       return {

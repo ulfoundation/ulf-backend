@@ -3,6 +3,7 @@ import multer from "multer";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs/promises";
+import { UPLOADS_ROOT, getPublicBase, generateFilename } from "../utils/media.js";
 import { requireAuth } from "../middleware/auth.js";
 import { ok, badRequest, serverError } from "../utils/respond.js";
 import logger from "../utils/logger.js";
@@ -14,16 +15,12 @@ const router = express.Router();
 /* -------------------------------------------------------------------------- */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const teamDir = path.resolve(__dirname, "../../client/uploads/team");
+const teamDir = path.join(UPLOADS_ROOT, "team");
 await fs.mkdir(teamDir, { recursive: true }).catch(() => {});
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, teamDir),
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const base = path.basename(file.originalname, ext).replace(/[^a-z0-9_-]+/gi, "-");
-    cb(null, `${Date.now()}-${base}${ext}`);
-  },
+  filename: (_req, file, cb) => cb(null, generateFilename(file.originalname)),
 });
 
 const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
@@ -37,7 +34,7 @@ router.post("/team", requireAuth, upload.single("image"), async (req, res) => {
       return badRequest(res, "No image uploaded");
     }
 
-    const url = `${req.protocol}://${req.get("host")}/uploads/team/${path.basename(req.file.path)}`;
+    const url = `${getPublicBase(req)}/uploads/team/${path.basename(req.file.path)}`;
 
     ok(res, { url });
   } catch (err) {

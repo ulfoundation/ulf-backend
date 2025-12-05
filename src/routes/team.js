@@ -8,6 +8,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs/promises";
 import https from "https";
+import { getPublicBase, UPLOADS_ROOT } from "../utils/media.js";
 import fsSync from "fs";
 
 const router = express.Router();
@@ -15,8 +16,7 @@ const router = express.Router();
 // Local directory for team photos
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const uploadsRoot = path.resolve(__dirname, "../../client/uploads");
-const teamDir = path.join(uploadsRoot, "team");
+const teamDir = path.join(UPLOADS_ROOT, "team");
 try { fsSync.mkdirSync(teamDir, { recursive: true }); } catch {}
 
 function stableFilenameFromUrl(u) {
@@ -78,7 +78,7 @@ async function ensureLocalPhoto(src, baseUrl) {
 router.get("/", async (req, res) => {
   try {
     const team = await Team.find().sort({ createdAt: -1 });
-    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const baseUrl = getPublicBase(req);
     const out = [];
     for (const m of team) {
       let photo = m.photo;

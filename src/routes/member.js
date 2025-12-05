@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import Member from "../models/Member.js";
 import { ok, badRequest, notFound, serverError } from "../utils/respond.js";
 import logger from "../utils/logger.js";
+import { UPLOADS_ROOT, getPublicBase, generateFilename, extractUploadsRel } from "../utils/media.js";
 import { body, param, query, validationResult } from "express-validator";
 import https from "https";
 
@@ -16,7 +17,7 @@ const router = express.Router();
 /* -------------------------------------------------------------------------- */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const avatarsDir = path.resolve(__dirname, "../../client/uploads/members");
+const avatarsDir = path.join(UPLOADS_ROOT, "members");
 import fsSync from "fs";
 fsSync.mkdirSync(avatarsDir, { recursive: true });
 
@@ -41,7 +42,7 @@ if (!fsSync.existsSync("temp_uploads")) {
 router.get("/", async (req, res) => {
   try {
     const members = await Member.find().sort({ createdAt: -1 });
-    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const baseUrl = getPublicBase(req);
     const out = [];
     for (const m of members) {
       let avatar = m.avatar;
@@ -174,12 +175,10 @@ router.post(
     let avatarUrl = "";
     if (req.file) {
       try {
-        const ext = path.extname(req.file.originalname).toLowerCase();
-        const base = path.basename(req.file.originalname, ext).replace(/[^a-z0-9_-]+/gi, "-");
-        const filename = `${Date.now()}-${base}${ext}`;
+        const filename = generateFilename(req.file.originalname);
         const targetPath = path.join(avatarsDir, filename);
         await fs.rename(req.file.path, targetPath);
-        avatarUrl = `${req.protocol}://${req.get("host")}/uploads/members/${filename}`;
+        avatarUrl = `${getPublicBase(req)}/uploads/members/${filename}`;
       } catch (uploadErr) {
         logger.error("Local avatar save failed", { message: uploadErr.message });
         await fs.unlink(req.file.path).catch(() => {});
@@ -237,12 +236,10 @@ router.put(
     // 💾 New avatar uploaded
     if (req.file) {
       try {
-        const ext = path.extname(req.file.originalname).toLowerCase();
-        const base = path.basename(req.file.originalname, ext).replace(/[^a-z0-9_-]+/gi, "-");
-        const filename = `${Date.now()}-${base}${ext}`;
+        const filename = generateFilename(req.file.originalname);
         const targetPath = path.join(avatarsDir, filename);
         await fs.rename(req.file.path, targetPath);
-        updateData.avatar = `${req.protocol}://${req.get("host")}/uploads/members/${filename}`;
+        updateData.avatar = `${getPublicBase(req)}/uploads/members/${filename}`;
       } catch (uploadErr) {
         logger.warn("Avatar save failed", { message: uploadErr.message });
         await fs.unlink(req.file.path).catch(() => {});
@@ -281,8 +278,8 @@ router.delete(
     if (!member) return notFound(res, "Member not found");
 
     if (member.avatar && member.avatar.includes("/uploads/")) {
-      const rel = member.avatar.split("/uploads/")[1];
-      const filePath = path.join(path.resolve(__dirname, "../../client/uploads"), rel);
+      const rel = extractUploadsRel(member.avatar);
+      const filePath = path.join(UPLOADS_ROOT, rel);
       await fs.unlink(filePath).catch(() => {});
     }
 
