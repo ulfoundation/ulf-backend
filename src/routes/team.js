@@ -5,6 +5,7 @@ import { body, validationResult } from "express-validator";
 import { ok, badRequest, forbidden, notFound, serverError } from "../utils/respond.js";
 import logger from "../utils/logger.js";
 import path from "path";
+import { fileURLToPath } from "url";
 import fs from "fs/promises";
 import https from "https";
 import fsSync from "fs";
@@ -12,7 +13,9 @@ import fsSync from "fs";
 const router = express.Router();
 
 // Local directory for team photos
-const uploadsRoot = path.join(process.cwd(), "../client/uploads");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const uploadsRoot = path.resolve(__dirname, "../../client/uploads");
 const teamDir = path.join(uploadsRoot, "team");
 try { fsSync.mkdirSync(teamDir, { recursive: true }); } catch {}
 

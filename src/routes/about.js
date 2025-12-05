@@ -1,6 +1,7 @@
 import express from "express";
 import multer from "multer";
 import path from "path";
+import { fileURLToPath } from "url";
 import fs from "fs/promises";
 import About from "../models/About.js";
 import { requireAuth } from "../middleware/auth.js";
@@ -10,7 +11,9 @@ const router = express.Router();
 /* -------------------------------------------------------------------------- */
 /* 💾 Local Disk Storage for About images                                     */
 /* -------------------------------------------------------------------------- */
-const aboutDir = path.join(process.cwd(), "../client/uploads", "about");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const aboutDir = path.resolve(__dirname, "../../client/uploads/about");
 import fsSync from "fs";
 fsSync.mkdirSync(aboutDir, { recursive: true });
 
@@ -98,7 +101,7 @@ router.put("/", requireAuth, upload.array("images", 3), async (req, res) => {
           for (const imgUrl of about.images) {
             const rel = extractLocalRelative(imgUrl);
             if (!rel) continue;
-            const filePath = path.join(process.cwd(), "../client/uploads", rel);
+            const filePath = path.join(path.resolve(__dirname, "../../client/uploads"), rel);
             await fs.unlink(filePath).catch(() => {});
           }
         }

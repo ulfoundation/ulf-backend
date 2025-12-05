@@ -2,6 +2,7 @@ import express from "express";
 import multer from "multer";
 import fs from "fs/promises";
 import path from "path";
+import { fileURLToPath } from "url";
 import Member from "../models/Member.js";
 import { ok, badRequest, notFound, serverError } from "../utils/respond.js";
 import logger from "../utils/logger.js";
@@ -13,7 +14,9 @@ const router = express.Router();
 /* -------------------------------------------------------------------------- */
 /* 💾 Local storage directories                                               */
 /* -------------------------------------------------------------------------- */
-const avatarsDir = path.join(process.cwd(), "../client/uploads", "members");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const avatarsDir = path.resolve(__dirname, "../../client/uploads/members");
 import fsSync from "fs";
 fsSync.mkdirSync(avatarsDir, { recursive: true });
 
@@ -279,7 +282,7 @@ router.delete(
 
     if (member.avatar && member.avatar.includes("/uploads/")) {
       const rel = member.avatar.split("/uploads/")[1];
-      const filePath = path.join(process.cwd(), "../client/uploads", rel);
+      const filePath = path.join(path.resolve(__dirname, "../../client/uploads"), rel);
       await fs.unlink(filePath).catch(() => {});
     }
 

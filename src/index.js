@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import morgan from "morgan";
 import path from "path";
+import { fileURLToPath } from "url";
 import helmet from "helmet";
 import compression from "compression";
 import rateLimit from "express-rate-limit";
@@ -81,7 +82,10 @@ app.use(morgan("dev"));
 /* -------------------------------------------------------------------------- */
 /* 📁 Serve Uploaded Files                                                    */
 /* -------------------------------------------------------------------------- */
-app.use("/uploads", express.static(path.join(process.cwd(), "../client/uploads")));
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const UPLOADS_ROOT = path.resolve(__dirname, "../../client/uploads");
+app.use("/uploads", express.static(UPLOADS_ROOT));
 
 /* -------------------------------------------------------------------------- */
 /* 🚏 API Routes                                                              */

@@ -1,6 +1,7 @@
 import express from "express";
 import multer from "multer";
 import path from "path";
+import { fileURLToPath } from "url";
 import fs from "fs/promises";
 import { requireAuth } from "../middleware/auth.js";
 import { ok, badRequest, serverError } from "../utils/respond.js";
@@ -11,7 +12,9 @@ const router = express.Router();
 /* -------------------------------------------------------------------------- */
 /* 💾 Local Disk Storage — Team Photos                                        */
 /* -------------------------------------------------------------------------- */
-const teamDir = path.join(process.cwd(), "../client/uploads", "team");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const teamDir = path.resolve(__dirname, "../../client/uploads/team");
 await fs.mkdir(teamDir, { recursive: true }).catch(() => {});
 
 const storage = multer.diskStorage({

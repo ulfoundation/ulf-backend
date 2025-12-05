@@ -2,6 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import fs from "fs/promises";
 import path from "path";
+import { fileURLToPath } from "url";
 import https from "https";
 import crypto from "crypto";
 import Post from "../models/Post.js";
@@ -25,7 +26,9 @@ const upload = multer({
 
 // Ensure local upload directories exist
 import fsSync from "fs";
-const uploadsRoot = path.join(process.cwd(), "../client/uploads");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const uploadsRoot = path.resolve(__dirname, "../../client/uploads");
 const postImagesDir = path.join(uploadsRoot, "posts", "images");
 const postVideosDir = path.join(uploadsRoot, "posts", "videos");
 const tempDir = path.join(process.cwd(), "temp_uploads");
@@ -374,7 +377,7 @@ router.put(
           if (removeMedia.includes(src)) {
             const rel = extractLocalRelative(src);
             if (rel) {
-            const filePath = path.join(process.cwd(), "../client/uploads", rel);
+            const filePath = path.join(uploadsRoot, rel);
               await fs.unlink(filePath).catch(() => {});
             }
             continue;
@@ -433,7 +436,7 @@ router.delete(
         const src = typeof m === "string" ? m : m.full || m.thumb;
         const rel = extractLocalRelative(src);
         if (!rel) continue;
-        const filePath = path.join(process.cwd(), "../client/uploads", rel);
+        const filePath = path.join(uploadsRoot, rel);
         await fs.unlink(filePath).catch(() => {});
       }
 
