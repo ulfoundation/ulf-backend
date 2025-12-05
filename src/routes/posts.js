@@ -168,7 +168,7 @@ router.post(
         const targetPath = path.join(targetDir, filename);
         try {
           await fs.rename(file.path, targetPath);
-          const url = `${req.protocol}://${req.get("host")}/uploads/posts/${isVideo ? "videos" : "images"}/${filename}`;
+      const url = `${req.protocol}://${req.get("host")}/uploads/posts/${isVideo ? "videos" : "images"}/${filename}`;
           media.push({ full: url, thumb: url, type: isVideo ? "video" : "image" });
           logger.info("Saved media locally", { url });
         } catch (err) {
@@ -374,7 +374,7 @@ router.put(
           if (removeMedia.includes(src)) {
             const rel = extractLocalRelative(src);
             if (rel) {
-              const filePath = path.join(process.cwd(), "../client/uploads", rel);
+            const filePath = path.join(process.cwd(), "../client/uploads", rel);
               await fs.unlink(filePath).catch(() => {});
             }
             continue;
