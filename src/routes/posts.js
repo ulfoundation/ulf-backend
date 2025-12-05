@@ -117,6 +117,28 @@ function extractLocalRelative(u) {
   return u.slice(idx + "/uploads/".length);
 }
 
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function isRelUsedByOtherPosts(rel, excludeId) {
+  try {
+    const pattern = new RegExp(`/uploads/${escapeRegex(rel)}$`);
+    const count = await Post.countDocuments({
+      _id: { $ne: excludeId },
+      $or: [
+        { "imageUrls.full": { $regex: pattern } },
+        { "imageUrls.thumb": { $regex: pattern } },
+        // legacy string entries
+        { imageUrls: { $elemMatch: { $regex: pattern } } },
+      ],
+    });
+    return count > 0;
+  } catch {
+    return true;
+  }
+}
+
 function getVisitorId(req) {
   const ip = (req.headers["x-forwarded-for"]?.split(",")[0] || req.ip || "").toString();
   const ua = (req.get("user-agent") || "").toString();
@@ -377,8 +399,11 @@ router.put(
           if (removeMedia.includes(src)) {
             const rel = extractLocalRelative(src);
             if (rel) {
-            const filePath = path.join(uploadsRoot, rel);
-              await fs.unlink(filePath).catch(() => {});
+              const filePath = path.join(uploadsRoot, rel);
+              const usedElsewhere = await isRelUsedByOtherPosts(rel, postId);
+              if (!usedElsewhere) {
+                await fs.unlink(filePath).catch(() => {});
+              }
             }
             continue;
           }
@@ -437,7 +462,10 @@ router.delete(
         const rel = extractLocalRelative(src);
         if (!rel) continue;
         const filePath = path.join(uploadsRoot, rel);
-        await fs.unlink(filePath).catch(() => {});
+        const usedElsewhere = await isRelUsedByOtherPosts(rel, post._id);
+        if (!usedElsewhere) {
+          await fs.unlink(filePath).catch(() => {});
+        }
       }
 
       await Comment.deleteMany({ postId: post._id });

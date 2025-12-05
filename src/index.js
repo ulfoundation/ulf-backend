@@ -85,7 +85,20 @@ app.use(morgan("dev"));
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const UPLOADS_ROOT = path.resolve(__dirname, "../../client/uploads");
-app.use("/uploads", express.static(UPLOADS_ROOT));
+app.use(
+  "/uploads",
+  express.static(UPLOADS_ROOT, {
+    etag: false,
+    lastModified: false,
+    cacheControl: false,
+    maxAge: 0,
+    setHeaders: (res) => {
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+    },
+  })
+);
 
 /* -------------------------------------------------------------------------- */
 /* 🚏 API Routes                                                              */

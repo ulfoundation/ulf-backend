@@ -64,13 +64,12 @@ router.post('/create-checkout-session', [
     }
     const stripe = new Stripe(secret);
 
-    const frontendBase = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const frontendBase = (req.get('origin') || process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
     const label = causeType === 'beneficiary' ? 'Donation to Beneficiary' : 'Donation to Foundation';
     const description = causeType === 'beneficiary' && memberId ? `Beneficiary ID: ${memberId}` : 'General cause';
 
     const pmByCurrency = {
-      // Card enables Apple Pay / Google Pay / Samsung Pay when properly configured in Dashboard
-      usd: ['card', 'link', 'cashapp', 'affirm', 'afterpay_clearpay', 'us_bank_account', 'alipay'],
+      usd: ['card', 'link', 'cashapp', 'affirm', 'afterpay_clearpay', 'us_bank_account', 'alipay', 'klarna'],
       eur: ['card', 'link', 'bancontact', 'giropay', 'ideal', 'sepa_debit', 'sofort', 'klarna', 'alipay'],
       gbp: ['card', 'link', 'sepa_debit', 'klarna', 'afterpay_clearpay', 'alipay'],
       ngn: ['card', 'link'],
@@ -102,7 +101,6 @@ router.post('/create-checkout-session', [
         },
       });
     } catch (pmErr) {
-      logger.warn('Checkout create failed with extended payment methods, retrying with safe defaults', pmErr);
       const safeTypes = (currency || 'usd').toLowerCase() === 'usd'
         ? ['card', 'link', 'us_bank_account']
         : (currency || 'usd').toLowerCase() === 'eur'
