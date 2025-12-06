@@ -1,11 +1,12 @@
 import admin from "firebase-admin";
 import fs from "fs";
 import path from "path";
+import logger from "./logger.js";
 
 let initialized = false;
 export function initFirebase() {
   if (initialized) return admin;
-  const storageBucket = process.env.FIREBASE_STORAGE_BUCKET;
+  const storageBucket = process.env.FIREBASE_STORAGE_BUCKET || (process.env.FIREBASE_PROJECT_ID ? `${process.env.FIREBASE_PROJECT_ID}.appspot.com` : undefined);
   const credsPath = process.env.FIREBASE_CREDENTIALS_PATH || process.env.GOOGLE_APPLICATION_CREDENTIALS;
   const projectId = process.env.FIREBASE_PROJECT_ID;
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
@@ -71,7 +72,6 @@ export function gcsPathFromUrl(url) {
     }
     if (u.hostname === "firebasestorage.googleapis.com") {
       const parts = u.pathname.split("/").filter(Boolean);
-      // expected: v0/b/<bucket>/o/<object>
       const idx = parts.findIndex((p) => p === "o");
       if (idx === -1 || idx + 1 >= parts.length) return null;
       const objectPart = parts.slice(idx + 1).join("/");
@@ -80,5 +80,19 @@ export function gcsPathFromUrl(url) {
     return null;
   } catch {
     return null;
+  }
+}
+
+export async function verifyFirebaseStorage() {
+  try {
+    const bucket = getBucket();
+    const [exists] = await bucket.exists();
+    if (exists) {
+      logger.info("Firebase storage bucket verified", { bucket: bucket.name });
+    } else {
+      logger.error("Firebase storage bucket does not exist", { bucket: bucket.name });
+    }
+  } catch (err) {
+    logger.error("Firebase storage verification failed", { message: err?.message || String(err) });
   }
 }

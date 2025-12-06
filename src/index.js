@@ -22,6 +22,7 @@ import memberRoutes from "./routes/member.js";
 import contactRoutes from "./routes/contact.js";
 import teamRoutes from "./routes/team.js";
 import uploadRoutes from "./routes/upload.js";
+import { verifyFirebaseStorage } from "./utils/firebase.js";
 
 // Initialize app
 const app = express();
@@ -32,6 +33,7 @@ app.set("trust proxy", 1);
 /* -------------------------------------------------------------------------- */
 const defaultOrigins = [
   "http://localhost:5173",                // local dev (Vite)
+  "http://localhost:5174",                // alt dev port (Vite)
   "https://unitedlinkfoundation.com",     // production main domain
   "https://www.unitedlinkfoundation.com", // optional www version
 ];
@@ -153,6 +155,7 @@ const PORT = process.env.PORT || 5020;
 
 connectDB()
   .then(() => {
+    verifyFirebaseStorage().catch(() => {});
     app.listen(PORT, () => {
       console.log(
         `✅ Server running on port ${PORT} — Allowed origins:\n${allowedOrigins.join(

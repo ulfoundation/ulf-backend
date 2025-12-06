@@ -52,8 +52,14 @@ function extFromUrl(u) {
 }
 
 function isVideoUrl(u) {
+  try {
+    const parsed = new URL(String(u));
+    const pathname = decodeURIComponent(parsed.pathname || "");
+    const ext = path.extname(pathname).toLowerCase();
+    if (ext) return /(\.mp4|\.mov|\.webm|\.avi)/.test(ext);
+  } catch {}
   const s = String(u).toLowerCase();
-  return s.includes("/video/upload/") || s.match(/\.(mp4|mov|webm|avi)$/);
+  return s.includes("/video/upload/") || /\.(mp4|mov|webm|avi)(?:$|[?#])/.test(s);
 }
 
 function stableFilenameFromCloudinary(u) {
@@ -455,7 +461,7 @@ router.put(
           media.push({ full: url, thumb: url, type: isVideo ? "video" : "image" });
         } catch (err) {
           await fs.unlink(file.path).catch(() => {});
-          return serverError(res, "Failed to save media");
+          return serverError(res, `Failed to save media: ${err?.message || "unknown error"}`);
         }
       }
 
