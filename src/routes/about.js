@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs/promises";
 import { UPLOADS_ROOT, getPublicBase, extractUploadsRel, generateFilename } from "../utils/media.js";
+import { uploadFileToFirebase, deleteFirebaseFile, gcsPathFromUrl } from "../utils/firebase.js";
 import About from "../models/About.js";
 import { requireAuth } from "../middleware/auth.js";
 
@@ -78,8 +79,32 @@ router.put("/", requireAuth, upload.array("images", 3), async (req, res) => {
     }
 
     const { content } = req.body;
-    const base = getPublicBase(req);
-    const uploadedImages = (req.files || []).map((file) => `${base}/uploads/about/${path.basename(file.path)}`);
+    let uploadedImages = [];
+
+    const rawUrls = req.body.images || req.body.imageUrls;
+    let urlList = [];
+    if (typeof rawUrls === "string") {
+      try {
+        const parsed = JSON.parse(rawUrls);
+        if (Array.isArray(parsed)) urlList = parsed;
+      } catch {
+        urlList = rawUrls.split(",").map((s) => s.trim()).filter(Boolean);
+      }
+    } else if (Array.isArray(rawUrls)) {
+      urlList = rawUrls.filter((u) => typeof u === "string");
+    }
+
+    if (urlList.length > 0) {
+      uploadedImages = urlList.slice(0, 3);
+    } else {
+      for (const file of req.files || []) {
+        const filename = path.basename(file.path);
+        const dest = `about/${filename}`;
+        const url = await uploadFileToFirebase(file.path, dest, file.mimetype, true);
+        await fs.unlink(file.path).catch(() => {});
+        uploadedImages.push(url);
+      }
+    }
 
     let about = await About.findOne();
 
@@ -90,15 +115,12 @@ router.put("/", requireAuth, upload.array("images", 3), async (req, res) => {
         images: uploadedImages.slice(0, 3),
       });
     } else {
-      // 🧹 Replace images if new ones provided
+      // Replace images if new ones provided
       if (uploadedImages.length > 0) {
-        // delete old local images if present
         if (about.images?.length > 0) {
           for (const imgUrl of about.images) {
-            const rel = extractUploadsRel(imgUrl);
-            if (!rel) continue;
-            const filePath = path.join(UPLOADS_ROOT, rel);
-            await fs.unlink(filePath).catch(() => {});
+            const gcs = gcsPathFromUrl(imgUrl);
+            if (gcs) await deleteFirebaseFile(gcs).catch(() => {});
           }
         }
         about.images = uploadedImages.slice(0, 3);

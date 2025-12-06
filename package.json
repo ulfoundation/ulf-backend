@@ -10,6 +10,7 @@
     "download:cloudinary": "node src/scripts/downloadCloudinaryAll.js",
     "audit:cloudinary": "node src/scripts/auditCloudinaryUsage.js",
     "migrate:posts": "node src/scripts/batchMigratePosts.js",
+    "migrate:uploads-firebase": "node src/scripts/migrateUploadsToFirebase.js",
     "migrate:rewrite-uploads": "node src/scripts/rewriteUploadsToPublicBase.js"
   },
   "dependencies": {
@@ -30,6 +31,7 @@
     "nodemailer": "^7.0.10",
     "pdfkit": "^0.17.2",
     "stripe": "^20.0.0",
+    "firebase-admin": "^12.5.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

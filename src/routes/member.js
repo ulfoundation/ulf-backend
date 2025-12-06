@@ -7,6 +7,7 @@ import Member from "../models/Member.js";
 import { ok, badRequest, notFound, serverError } from "../utils/respond.js";
 import logger from "../utils/logger.js";
 import { UPLOADS_ROOT, getPublicBase, generateFilename, extractUploadsRel } from "../utils/media.js";
+import { uploadFileToFirebase, deleteFirebaseFile, gcsPathFromUrl } from "../utils/firebase.js";
 import { body, param, query, validationResult } from "express-validator";
 import https from "https";
 
@@ -176,9 +177,9 @@ router.post(
     if (req.file) {
       try {
         const filename = generateFilename(req.file.originalname);
-        const targetPath = path.join(avatarsDir, filename);
-        await fs.rename(req.file.path, targetPath);
-        avatarUrl = `${getPublicBase(req)}/uploads/members/${filename}`;
+        const dest = `members/${filename}`;
+        avatarUrl = await uploadFileToFirebase(req.file.path, dest, req.file.mimetype, true);
+        await fs.unlink(req.file.path).catch(() => {});
       } catch (uploadErr) {
         logger.error("Local avatar save failed", { message: uploadErr.message });
         await fs.unlink(req.file.path).catch(() => {});
@@ -237,9 +238,9 @@ router.put(
     if (req.file) {
       try {
         const filename = generateFilename(req.file.originalname);
-        const targetPath = path.join(avatarsDir, filename);
-        await fs.rename(req.file.path, targetPath);
-        updateData.avatar = `${getPublicBase(req)}/uploads/members/${filename}`;
+        const dest = `members/${filename}`;
+        updateData.avatar = await uploadFileToFirebase(req.file.path, dest, req.file.mimetype, true);
+        await fs.unlink(req.file.path).catch(() => {});
       } catch (uploadErr) {
         logger.warn("Avatar save failed", { message: uploadErr.message });
         await fs.unlink(req.file.path).catch(() => {});
@@ -277,10 +278,9 @@ router.delete(
     const member = await Member.findById(req.params.id);
     if (!member) return notFound(res, "Member not found");
 
-    if (member.avatar && member.avatar.includes("/uploads/")) {
-      const rel = extractUploadsRel(member.avatar);
-      const filePath = path.join(UPLOADS_ROOT, rel);
-      await fs.unlink(filePath).catch(() => {});
+    if (member.avatar) {
+      const gcs = gcsPathFromUrl(member.avatar);
+      if (gcs) await deleteFirebaseFile(gcs).catch(() => {});
     }
 
     await member.deleteOne();

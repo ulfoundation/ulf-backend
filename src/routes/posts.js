@@ -14,6 +14,7 @@ import { ok, created, badRequest, forbidden, serverError } from "../utils/respon
 import rateLimit from "express-rate-limit";
 import { UPLOADS_ROOT, getPublicBase, extractUploadsRel, generateFilename } from "../utils/media.js";
 import logger from "../utils/logger.js";
+import { uploadFileToFirebase, deleteFirebaseFile, gcsPathFromUrl } from "../utils/firebase.js";
 
 const router = Router();
 
@@ -135,6 +136,22 @@ async function isRelUsedByOtherPosts(rel, excludeId) {
   }
 }
 
+async function isUrlUsedByOtherPosts(url, excludeId) {
+  try {
+    const count = await Post.countDocuments({
+      _id: { $ne: excludeId },
+      $or: [
+        { "imageUrls.full": url },
+        { "imageUrls.thumb": url },
+        { imageUrls: { $elemMatch: { $eq: url } } },
+      ],
+    });
+    return count > 0;
+  } catch {
+    return true;
+  }
+}
+
 function getVisitorId(req) {
   const ip = (req.headers["x-forwarded-for"]?.split(",")[0] || req.ip || "").toString();
   const ua = (req.get("user-agent") || "").toString();
@@ -176,7 +193,20 @@ router.post(
         ...(Array.isArray(req.files?.media) ? req.files.media : []),
       ];
 
-      if (!content && incomingFiles.length === 0) {
+      const rawUrls = req.body.mediaUrls || req.body.imageUrls;
+      let incomingUrls = [];
+      if (typeof rawUrls === "string") {
+        try {
+          const parsed = JSON.parse(rawUrls);
+          if (Array.isArray(parsed)) incomingUrls = parsed;
+        } catch {
+          incomingUrls = rawUrls.split(",").map((s) => s.trim()).filter(Boolean);
+        }
+      } else if (Array.isArray(rawUrls)) {
+        incomingUrls = rawUrls.filter((u) => typeof u === "string");
+      }
+
+      if (!content && incomingFiles.length === 0 && incomingUrls.length === 0) {
         return badRequest(res, "Post must include text or media");
       }
 
@@ -184,22 +214,23 @@ router.post(
 
       for (const file of incomingFiles) {
         const isVideo = file.mimetype.startsWith("video/");
-        const targetDir = isVideo ? postVideosDir : postImagesDir;
-        const ext = path.extname(file.originalname).toLowerCase();
-        const base = path.basename(file.originalname, ext).replace(/[^a-z0-9_-]+/gi, "-");
-        const filename = `${Date.now()}-${base}${ext}`;
-        const targetPath = path.join(targetDir, filename);
+        const filename = generateFilename(file.originalname);
+        const dest = `posts/${isVideo ? "videos" : "images"}/${filename}`;
         try {
-          await fs.rename(file.path, targetPath);
-          const url = `${getPublicBase(req)}/uploads/posts/${isVideo ? "videos" : "images"}/${filename}`;
+          const url = await uploadFileToFirebase(file.path, dest, file.mimetype, true);
+          await fs.unlink(file.path).catch(() => {});
           media.push({ full: url, thumb: url, type: isVideo ? "video" : "image" });
-          logger.info("Saved media locally", { url });
+          logger.info("Saved media to Firebase", { url });
         } catch (err) {
-          logger.error("Local save error", err);
-          // Attempt cleanup
+          logger.error("Firebase save error", err);
           await fs.unlink(file.path).catch(() => {});
           throw err;
         }
+      }
+
+      for (const url of incomingUrls) {
+        const type = isVideoUrl(url) ? "video" : "image";
+        media.push({ full: url, thumb: url, type });
       }
 
       const newPost = new Post({
@@ -383,11 +414,22 @@ router.put(
         ? req.body.removeMedia.split(",").map((s) => s.trim()).filter(Boolean)
         : [];
 
-      const baseUrl = getPublicBase(req);
       const incomingFiles = [
         ...(Array.isArray(req.files?.images) ? req.files.images : []),
         ...(Array.isArray(req.files?.media) ? req.files.media : []),
       ];
+      const rawUrls = req.body.mediaUrls || req.body.imageUrls;
+      let incomingUrls = [];
+      if (typeof rawUrls === "string") {
+        try {
+          const parsed = JSON.parse(rawUrls);
+          if (Array.isArray(parsed)) incomingUrls = parsed;
+        } catch {
+          incomingUrls = rawUrls.split(",").map((s) => s.trim()).filter(Boolean);
+        }
+      } else if (Array.isArray(rawUrls)) {
+        incomingUrls = rawUrls.filter((u) => typeof u === "string");
+      }
 
       let media = Array.isArray(post.imageUrls) ? [...post.imageUrls] : [];
       if (removeMedia.length > 0) {
@@ -395,14 +437,7 @@ router.put(
         for (const m of media) {
           const src = typeof m === "string" ? m : m.full || m.thumb;
           if (removeMedia.includes(src)) {
-            const rel = extractLocalRelative(src);
-            if (rel) {
-              const filePath = path.join(uploadsRoot, rel);
-              const usedElsewhere = await isRelUsedByOtherPosts(rel, postId);
-              if (!usedElsewhere) {
-                await fs.unlink(filePath).catch(() => {});
-              }
-            }
+            // Do not delete physical files on update; only remove the reference
             continue;
           }
           keep.push(m);
@@ -412,19 +447,21 @@ router.put(
 
       for (const file of incomingFiles) {
         const isVideo = file.mimetype.startsWith("video/");
-        const targetDir = isVideo ? postVideosDir : postImagesDir;
-        const ext = path.extname(file.originalname).toLowerCase();
-        const base = path.basename(file.originalname, ext).replace(/[^a-z0-9_-]+/gi, "-");
-        const filename = `${Date.now()}-${base}${ext}`;
-        const targetPath = path.join(targetDir, filename);
+        const filename = generateFilename(file.originalname);
+        const dest = `posts/${isVideo ? "videos" : "images"}/${filename}`;
         try {
-          await fs.rename(file.path, targetPath);
-          const url = `${baseUrl}/uploads/posts/${isVideo ? "videos" : "images"}/${filename}`;
+          const url = await uploadFileToFirebase(file.path, dest, file.mimetype, true);
+          await fs.unlink(file.path).catch(() => {});
           media.push({ full: url, thumb: url, type: isVideo ? "video" : "image" });
         } catch (err) {
           await fs.unlink(file.path).catch(() => {});
           return serverError(res, "Failed to save media");
         }
+      }
+
+      for (const url of incomingUrls) {
+        const type = isVideoUrl(url) ? "video" : "image";
+        media.push({ full: url, thumb: url, type });
       }
 
       if (typeof req.body.content === "string") {
@@ -457,12 +494,18 @@ router.delete(
       const media = Array.isArray(post.imageUrls) ? post.imageUrls : [];
       for (const m of media) {
         const src = typeof m === "string" ? m : m.full || m.thumb;
-        const rel = extractLocalRelative(src);
-        if (!rel) continue;
-        const filePath = path.join(uploadsRoot, rel);
-        const usedElsewhere = await isRelUsedByOtherPosts(rel, post._id);
-        if (!usedElsewhere) {
-          await fs.unlink(filePath).catch(() => {});
+        if (typeof src === "string") {
+          if (src.includes("/uploads/")) {
+            const rel = extractLocalRelative(src);
+            if (!rel) continue;
+            const filePath = path.join(uploadsRoot, rel);
+            const usedElsewhere = await isRelUsedByOtherPosts(rel, post._id);
+            if (!usedElsewhere) await fs.unlink(filePath).catch(() => {});
+          } else if (src.includes("storage.googleapis.com")) {
+            const usedElsewhere = await isUrlUsedByOtherPosts(src, post._id);
+            const gcs = gcsPathFromUrl(src);
+            if (gcs && !usedElsewhere) await deleteFirebaseFile(gcs).catch(() => {});
+          }
         }
       }
 
